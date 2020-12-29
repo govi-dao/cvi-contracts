@@ -12,8 +12,8 @@ import "./ILiquidation.sol";
 
 interface IPlatform {
 
-    event Deposit(address indexed account, uint256 tokenAmount, uint256 feeAmount);
-    event Withdraw(address indexed account, uint256 tokenAmount, uint256 feeAmount);
+    event Deposit(address indexed account, uint256 tokenAmount, uint256 lpTokensAmount, uint256 feeAmount);
+    event Withdraw(address indexed account, uint256 tokenAmount, uint256 lpTokensAmount, uint256 feeAmount);
     event OpenPosition(address indexed account, uint256 tokenAmount, uint256 feeAmount, uint256 positionUnitsAmount, uint256 cviValue);
     event ClosePosition(address indexed account, uint256 tokenAmount, uint256 feeAmount, uint256 positionUnitsAmount, uint256 cviValue);
     event LiquidatePosition(address indexed positionAddress, uint256 currentPositionBalance, bool isBalancePositive, uint256 positionUnitsAmount);

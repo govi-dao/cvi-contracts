@@ -14,7 +14,7 @@ contract CVIOracle is ICVIOracle {
     uint256 private constant CVI_DECIMALS_TRUNCATE = 10000;
     uint256 private constant MAX_CVI_VALUE = 200000000;
 
-    AggregatorV3Interface private cviAggregator;
+    AggregatorV3Interface public cviAggregator;
 
     constructor(AggregatorV3Interface _cviAggregator) public {
     	cviAggregator = _cviAggregator;

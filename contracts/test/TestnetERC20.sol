@@ -18,6 +18,8 @@ contract TestnetERC20 is ERC20, Ownable {
 
     constructor(string memory _name, string memory _symbol, uint8 _decimals) public ERC20(_name, _symbol) {
         _setupDecimals(_decimals);
+        uint initialDrip = dripSize * 1000 * 10 ** uint(decimals());
+        _mint(msg.sender, initialDrip);
     }
 
     function faucet() public payable {

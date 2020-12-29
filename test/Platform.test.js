@@ -198,6 +198,25 @@ describe('Platform', () => {
             bobTokens: bobLPTokens.add(bobSecondLPTokens), aliceTokens: aliceLPTokens});
     });
 
+    it('withdraws all lp tokens correctly', async () => {
+        const bobDepositTokensNumber = 1000;
+        const { depositTokens: bobDepositTokens, lpTokens: bobLPTokens } =
+            calculateDepositAmounts(bobDepositTokensNumber);
+
+        await this.token.transfer(bob, bobDepositTokens, {from: admin});
+        await this.token.approve(this.wethPlatform.address, bobDepositTokens, {from: bob});
+
+        await this.wethPlatform.deposit(bobDepositTokens, bobLPTokens, {from: bob});
+
+        let bobLPTokensBalance = await this.wethPlatform.balanceOf(bob);
+
+        await time.increase(3 * SECONDS_PER_DAY);
+
+        await this.wethPlatform.withdrawLPTokens(bobLPTokensBalance, {from: bob});
+
+        expect(await this.wethPlatform.balanceOf(bob)).to.be.bignumber.equal(new BN(0));
+    });
+
     it('withdraws liquidity correctly', async () => {
         const bobDepositTokensNumber = 5000;
         const { depositTokens: bobDepositTokens, depositTokenFees: bobDepositTokenFees,

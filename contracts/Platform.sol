@@ -23,7 +23,7 @@ contract Platform is IPlatform, Ownable, ERC20 {
         uint256 positionAddressesIndex;    
     }  
 
-    uint256 public constant INITIAL_RATE = 1000;
+    uint256 public constant INITIAL_RATE = 1e18;
     uint256 public constant MAX_FEE_PERCENTAGE = 10000;
     uint256 public constant MAX_PERCENTAGE = 1000000;
 
@@ -70,11 +70,12 @@ contract Platform is IPlatform, Ownable, ERC20 {
     }    
 
     function withdraw(uint256 _tokenAmount, uint256 _maxLPTokenBurnAmount) external override returns (uint256 burntAmount, uint256 withdrawnAmount) {
-        (burntAmount, withdrawnAmount) = _withdraw(_tokenAmount, _maxLPTokenBurnAmount, true);
+        (burntAmount, withdrawnAmount) = _withdraw(_tokenAmount, false, _maxLPTokenBurnAmount, true);
     }
 
     function withdrawLPTokens(uint256 _lpTokensAmount) external override returns (uint256 burntAmount, uint256 withdrawnAmount) {
-        (burntAmount, withdrawnAmount) = _withdrawLPTokens(_lpTokensAmount, true);
+        require(_lpTokensAmount > 0, "Amount must be positive");
+        (burntAmount, withdrawnAmount) = _withdraw(0, true, _lpTokensAmount, true);
     }
 
     function openPosition(uint256 _tokenAmount, uint16 _maxCVI) external override returns (uint256 positionUnitsAmount) {
@@ -200,7 +201,7 @@ contract Platform is IPlatform, Ownable, ERC20 {
                 lpTokenAmount = tokenAmountToDeposit.mul(INITIAL_RATE);
         }
 
-        emit Deposit(msg.sender, _tokenAmount, depositFee);
+        emit Deposit(msg.sender, _tokenAmount, lpTokenAmount, depositFee);
 
         require(lpTokenAmount >= _minLPTokenAmount, "Too few LP tokens");
         require(lpTokenAmount > 0, "Too few tokens");
@@ -213,15 +214,38 @@ contract Platform is IPlatform, Ownable, ERC20 {
         collectProfit(depositFee);
     }
 
-    function _withdrawLPTokens(uint256 _lpTokensAmount, bool _transferTokens) internal returns (uint256 burntAmount, uint256 withdrawnAmount) {
-        updateSnapshots();
-        uint256 tokenAmount = _lpTokensAmount.mul(totalBalance()).div(totalSupply());
-        (burntAmount, withdrawnAmount) = _withdraw(tokenAmount, _lpTokensAmount, _transferTokens);
-    }
+    function _withdraw(uint256 _tokenAmount, bool _shouldBurnMax, uint256 _maxLPTokenBurnAmount, bool _transferTokens) internal returns (uint256 burntAmount, uint256 withdrawnAmount) {
+        require(lastDepositTimestamp[msg.sender].add(lpsLockupPeriod) <= block.timestamp, "Funds are locked");
 
-    function _withdraw(uint256 _tokenAmount, uint256 _maxLPTokenBurnAmount, bool _transferTokens) internal returns (uint256 burntAmount, uint256 withdrawnAmount) {
         updateSnapshots();
-        (burntAmount, withdrawnAmount) = __withdraw(_tokenAmount, _maxLPTokenBurnAmount, _transferTokens);
+
+        if (_shouldBurnMax) {
+            burntAmount = _maxLPTokenBurnAmount;
+            _tokenAmount = burntAmount.mul(totalBalance()).div(totalSupply());
+        } else {
+            require(_tokenAmount > 0, "Tokens amount must be positive");
+
+            // Note: rounding up (ceiling) the to-burn amount to prevent precision loss
+            burntAmount = _tokenAmount.mul(totalSupply()).sub(1).div(totalBalance()).add(1);
+            require(burntAmount <= _maxLPTokenBurnAmount, "Too much LP tokens to burn");
+        }
+
+        require(burntAmount <= balanceOf(msg.sender), "Not enough LP tokens for account");
+        
+        uint256 withdrawFee = _tokenAmount.mul(uint256(feesCalculator.withdrawFeePercent())).div(MAX_FEE_PERCENTAGE);
+        withdrawnAmount = _tokenAmount.sub(withdrawFee);
+
+        require(token.balanceOf(address(this)).sub(totalPositionUnitsAmount) >= withdrawnAmount, "Collateral ratio broken");
+
+        emit Withdraw(msg.sender, _tokenAmount, burntAmount, withdrawFee);
+        
+        _burn(msg.sender, burntAmount);
+
+        if (_transferTokens) {
+            token.safeTransfer(msg.sender, withdrawnAmount);
+        }
+
+        collectProfit(withdrawFee);
     }
 
     function _openPosition(uint256 _tokenAmount, uint16 _maxCVI, bool _transferTokens) internal returns (uint256 positionUnitsAmount) {
@@ -329,31 +353,6 @@ contract Platform is IPlatform, Ownable, ERC20 {
     function updateSnapshots() private {
         uint256 singleUnitFundingFee = feesModel.updateSnapshots();
         totalFundingFeesAmount = totalFundingFeesAmount.add(singleUnitFundingFee.mul(totalPositionUnitsAmount).div(PRECISION_DECIMALS));
-    }
-
-    function __withdraw(uint256 _tokenAmount, uint256 _maxLPTokenBurnAmount, bool _transferTokens) private returns (uint256 burntAmount, uint256 withdrawnAmount) {
-        require(_tokenAmount > 0, "Tokens amount must be positive");
-        require(lastDepositTimestamp[msg.sender].add(lpsLockupPeriod) <= block.timestamp, "Funds are locked");
-
-        uint256 withdrawFee = _tokenAmount.mul(uint256(feesCalculator.withdrawFeePercent())).div(MAX_FEE_PERCENTAGE);
-        withdrawnAmount = _tokenAmount.sub(withdrawFee);
-
-        // Note: rounding up (ceiling) the to-burn amount to prevent precision loss
-        burntAmount = _tokenAmount.mul(totalSupply()).sub(1).div(totalBalance()).add(1);
-
-        require(burntAmount <= _maxLPTokenBurnAmount, "Too much LP tokens to burn");
-        require(burntAmount <= balanceOf(msg.sender), "Not enough LP tokens for account");
-        require(token.balanceOf(address(this)).sub(totalPositionUnitsAmount) >= withdrawnAmount, "Collateral ratio broken");
-
-        emit Withdraw(msg.sender, _tokenAmount, withdrawFee);
-
-        _burn(msg.sender, burntAmount);
-
-        if (_transferTokens) {
-            token.safeTransfer(msg.sender, withdrawnAmount);
-        }
-
-        collectProfit(withdrawFee);
     }
 
     function collectProfit(uint256 amount) private {
