@@ -14,14 +14,14 @@ contract CVIOracle is ICVIOracle {
     uint256 private constant CVI_DECIMALS_TRUNCATE = 10000;
     uint256 private constant MAX_CVI_VALUE = 200000000;
 
-    AggregatorV3Interface public cviAggregator;
+    AggregatorV3Interface public immutable cviAggregator;
 
     constructor(AggregatorV3Interface _cviAggregator) public {
     	cviAggregator = _cviAggregator;
     }
 
     function getCVIRoundData(uint80 _roundId) external view override returns (uint16 cviValue, uint256 cviTimestamp) {
-        (,int256 cviOracleValue, uint256 cviOracleTimestamp,,) = cviAggregator.getRoundData(_roundId);
+        (,int256 cviOracleValue,,uint256 cviOracleTimestamp,) = cviAggregator.getRoundData(_roundId);
         cviTimestamp = cviOracleTimestamp;
         cviValue = getTruncatedCVIValue(cviOracleValue);
     }
@@ -36,8 +36,8 @@ contract CVIOracle is ICVIOracle {
         require(cviOracleValue > 0, "CVI must be positive");
         uint256 cviValue = uint256(cviOracleValue);
         if (cviValue > MAX_CVI_VALUE) {
-            cviValue = MAX_CVI_VALUE;
+            cviValue = MAX_CVI_VALUE / CVI_DECIMALS_TRUNCATE;
         }
-        return uint16(cviValue.div(CVI_DECIMALS_TRUNCATE));
+        return uint16(cviValue / CVI_DECIMALS_TRUNCATE);
     }
 }

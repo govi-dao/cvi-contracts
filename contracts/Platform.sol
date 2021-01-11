@@ -45,6 +45,8 @@ contract Platform is IPlatform, Ownable, ERC20 {
     uint256 public totalPositionUnitsAmount;
     uint256 public totalFundingFeesAmount;
 
+    bool public emergencyWithdrawAllowed = false;
+
     mapping(address => uint256) public lastDepositTimestamp;
     mapping(address => Position) public positions;
 
@@ -87,14 +89,7 @@ contract Platform is IPlatform, Ownable, ERC20 {
     }
 
     function liquidatePositions(address[] calldata _positionOwners) external override returns (uint256 finderFeeAmount) {
-        updateSnapshots();
-        for ( uint256 i = 0; i < _positionOwners.length; i++) {
-            (uint256 liquidatedAmount, bool isPositive) = checkAndLiquidatePosition(_positionOwners[i]);
-            finderFeeAmount = finderFeeAmount.add(liquidation.getLiquidationReward(liquidatedAmount, isPositive, positions[holdersAddresses[i]].positionUnitsAmount));
-        }
-
-        require(finderFeeAmount > 0, "No reported position was found to be liquidatable");
-        token.safeTransfer(msg.sender, finderFeeAmount);
+        finderFeeAmount = _liquidatePositions(_positionOwners);
     }
 
     function setCVIOracle(ICVIOracle _newOracle) external override onlyOwner {
@@ -135,6 +130,10 @@ contract Platform is IPlatform, Ownable, ERC20 {
 
     function setFeesCalculator(IFeesCalculator _newCalculator) external override onlyOwner {
         feesCalculator = _newCalculator;
+    }
+
+    function setEmergencyWithdrawAllowed(bool _newEmergencyWithdrawAllowed) external override onlyOwner {
+        emergencyWithdrawAllowed = _newEmergencyWithdrawAllowed;
     }
 
     function getToken() external view override returns (IERC20) {
@@ -215,7 +214,7 @@ contract Platform is IPlatform, Ownable, ERC20 {
     }
 
     function _withdraw(uint256 _tokenAmount, bool _shouldBurnMax, uint256 _maxLPTokenBurnAmount, bool _transferTokens) internal returns (uint256 burntAmount, uint256 withdrawnAmount) {
-        require(lastDepositTimestamp[msg.sender].add(lpsLockupPeriod) <= block.timestamp, "Funds are locked");
+        require(emergencyWithdrawAllowed || lastDepositTimestamp[msg.sender].add(lpsLockupPeriod) <= block.timestamp, "Funds are locked");
 
         updateSnapshots();
 
@@ -235,7 +234,7 @@ contract Platform is IPlatform, Ownable, ERC20 {
         uint256 withdrawFee = _tokenAmount.mul(uint256(feesCalculator.withdrawFeePercent())).div(MAX_FEE_PERCENTAGE);
         withdrawnAmount = _tokenAmount.sub(withdrawFee);
 
-        require(token.balanceOf(address(this)).sub(totalPositionUnitsAmount) >= withdrawnAmount, "Collateral ratio broken");
+        require(emergencyWithdrawAllowed || token.balanceOf(address(this)).sub(totalPositionUnitsAmount) >= withdrawnAmount, "Collateral ratio broken");
 
         emit Withdraw(msg.sender, _tokenAmount, burntAmount, withdrawFee);
         
@@ -258,10 +257,12 @@ contract Platform is IPlatform, Ownable, ERC20 {
         updateSnapshots();
 
         uint256 openPositionFee = _tokenAmount.mul(uint256(feesCalculator.openPositionFeePercent())).div(MAX_FEE_PERCENTAGE);
+        uint256 positionUnitsAmountWithoutPremium =  _tokenAmount.sub(openPositionFee).mul(MAX_CVI_VALUE).div(cviValue);
+        uint256 minPositionUnitsAmount = positionUnitsAmountWithoutPremium.mul(MAX_FEE_PERCENTAGE.sub(feesCalculator.buyingPremiumFeeMaxPercent())).div(MAX_FEE_PERCENTAGE);
 
         uint256 collateralRatio = 0;
         if (token.balanceOf(address(this)) > 0) {
-            collateralRatio = totalPositionUnitsAmount.mul(PRECISION_DECIMALS).div(token.balanceOf(address(this)));
+            collateralRatio = (totalPositionUnitsAmount.add(minPositionUnitsAmount)).mul(PRECISION_DECIMALS).div(token.balanceOf(address(this)).add(_tokenAmount).sub(openPositionFee));
         }
         uint256 buyingPremiumFee = feesCalculator.calculateBuyingPremiumFee(_tokenAmount, collateralRatio);
         
@@ -269,7 +270,6 @@ contract Platform is IPlatform, Ownable, ERC20 {
         uint256 tokenAmountToOpenPosition = _tokenAmount.sub(openPositionFee).sub(buyingPremiumFee);
 
         positionUnitsAmount = tokenAmountToOpenPosition.mul(MAX_CVI_VALUE).div(cviValue);
-        require(positionUnitsAmount.add(totalPositionUnitsAmount) <= token.balanceOf(address(this)), "Not enough liquidity");
         
         totalPositionUnitsAmount = totalPositionUnitsAmount.add(positionUnitsAmount);
         if (positions[msg.sender].positionUnitsAmount > 0) {
@@ -290,6 +290,9 @@ contract Platform is IPlatform, Ownable, ERC20 {
         if (_transferTokens) {
             token.safeTransferFrom(msg.sender, address(this), _tokenAmount);
         }
+
+        // Note: checking collateral ratio after transfering tokens to cover cases where token transfer induces a fee, for example
+        require(positionUnitsAmount.add(totalPositionUnitsAmount) <= token.balanceOf(address(this)), "Not enough liquidity");
 
         collectProfit(openPositionFee);
 
@@ -314,14 +317,16 @@ contract Platform is IPlatform, Ownable, ERC20 {
         uint256 fundingFees = feesModel.calculateFundingFees(position.creationTimestamp, block.timestamp, _positionUnitsAmount);
         uint256 realizedPendingFees = position.pendingFees.mul(_positionUnitsAmount).div(position.positionUnitsAmount);
 
-        if (positionBalance < fundingFees.add(realizedPendingFees)) {
+        if (positionBalance <= fundingFees.add(realizedPendingFees)) {
             checkAndLiquidatePosition(msg.sender); // Will always liquidate
             return 0;
         } else {
             positionBalance = positionBalance.sub(fundingFees.add(realizedPendingFees));
         }
 
-        uint256 closePositionFee = positionBalance.mul(uint256(feesCalculator.closePositionFeePercent())).div(MAX_FEE_PERCENTAGE);
+        uint256 closePositionFee = positionBalance
+            .mul(uint256(feesCalculator.calculateClosePositionFeePercent(position.creationTimestamp)))
+            .div(MAX_FEE_PERCENTAGE);
 
         position.positionUnitsAmount = position.positionUnitsAmount.sub(_positionUnitsAmount);
         totalPositionUnitsAmount = totalPositionUnitsAmount.sub(_positionUnitsAmount);
@@ -340,6 +345,23 @@ contract Platform is IPlatform, Ownable, ERC20 {
         if (_transferTokens) {
             token.safeTransfer(msg.sender, tokenAmount);
         }
+    }
+
+    function _liquidatePositions(address[] calldata _positionOwners) internal returns (uint256 finderFeeAmount) {
+        updateSnapshots();
+        bool liquidationOccured = false;
+        for ( uint256 i = 0; i < _positionOwners.length; i++) {
+            uint256 positionUnitsAmount = positions[_positionOwners[i]].positionUnitsAmount;
+            (bool wasLiquidated, uint256 liquidatedAmount, bool isPositive) = checkAndLiquidatePosition(_positionOwners[i]);
+
+            if (wasLiquidated) {
+                liquidationOccured = true;
+                finderFeeAmount = finderFeeAmount.add(liquidation.getLiquidationReward(liquidatedAmount, isPositive, positionUnitsAmount));
+            }
+        }
+
+        require(liquidationOccured, "No reported position was found to be liquidatable");
+        token.safeTransfer(msg.sender, finderFeeAmount);
     }
 
     function _beforeTokenTransfer(address from, address to, uint256) internal override {
@@ -361,13 +383,14 @@ contract Platform is IPlatform, Ownable, ERC20 {
         }
     }
 
-    function checkAndLiquidatePosition(address _positionAddress) private returns (uint256 liquidatedAmount, bool isPositive) {
+    function checkAndLiquidatePosition(address _positionAddress) private returns (bool wasLiquidated, uint256 liquidatedAmount, bool isPositive) {
         (uint256 currentPositionBalance, bool isBalancePositive) = _calculatePositionBalance(_positionAddress);
         isPositive = isBalancePositive;
         liquidatedAmount = currentPositionBalance;
 
         if (liquidation.isLiquidationCandidate(currentPositionBalance, isBalancePositive, positions[_positionAddress].positionUnitsAmount)) {
             liquidatePosition(_positionAddress, currentPositionBalance, isBalancePositive);
+            wasLiquidated = true;
         }
     }
 

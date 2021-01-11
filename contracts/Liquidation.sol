@@ -19,14 +19,18 @@ contract Liquidation is ILiquidation, Ownable {
     uint256 public constant LIQUIDATION_MAX_FEE_PERCENTAGE = 1000;
 
     function setMinLiquidationThreshold(uint16 _newMinThreshold) external override onlyOwner {
+        require(_newMinThreshold >= liquidationMaxRewardAmount, "Threshold less than max");
         liquidationMinThreshold = _newMinThreshold;
     }
 
     function setMinLiquidationReward(uint16 _newMinRewardAmount) external override onlyOwner {
+        require(_newMinRewardAmount <= liquidationMaxRewardAmount, "Min greater than max");
         liquidationMinRewardAmount = _newMinRewardAmount;
     }
 
     function setMaxLiquidationReward(uint16 _newMaxRewardAmount) external override onlyOwner {
+        require(_newMaxRewardAmount <= liquidationMinThreshold, "Max greater than threshold");
+        require(_newMaxRewardAmount >= liquidationMinRewardAmount, "Max less than min");
         liquidationMaxRewardAmount = _newMaxRewardAmount;
     }
 
@@ -35,11 +39,16 @@ contract Liquidation is ILiquidation, Ownable {
     }
 
     function getLiquidationReward(uint256 positionBalance, bool isPositive, uint256 positionUnitsAmount) external view override returns (uint256 finderFeeAmount) {
-        if (!isPositive || positionBalance < positionUnitsAmount.mul(liquidationMinThreshold).div(LIQUIDATION_MAX_FEE_PERCENTAGE) ) {
+        if (!isLiquidationCandidate(positionBalance, isPositive, positionUnitsAmount)) {
+            return 0;
+        }
+
+        if (!isPositive || positionBalance < positionUnitsAmount.mul(liquidationMinRewardAmount).div(LIQUIDATION_MAX_FEE_PERCENTAGE)) {
             return positionUnitsAmount.mul(liquidationMinRewardAmount).div(LIQUIDATION_MAX_FEE_PERCENTAGE);
         }
         
-        if (isPositive && positionBalance >= positionUnitsAmount.mul(liquidationMinThreshold).div(LIQUIDATION_MAX_FEE_PERCENTAGE) && positionBalance <= positionUnitsAmount.mul(liquidationMaxRewardAmount).div(LIQUIDATION_MAX_FEE_PERCENTAGE)) {
+        if (isPositive && positionBalance >= positionUnitsAmount.mul(liquidationMinRewardAmount).div(LIQUIDATION_MAX_FEE_PERCENTAGE) 
+            && positionBalance <= positionUnitsAmount.mul(liquidationMaxRewardAmount).div(LIQUIDATION_MAX_FEE_PERCENTAGE)) {
             finderFeeAmount = positionBalance;
         } else {
             finderFeeAmount = positionUnitsAmount.mul(liquidationMaxRewardAmount).div(LIQUIDATION_MAX_FEE_PERCENTAGE);

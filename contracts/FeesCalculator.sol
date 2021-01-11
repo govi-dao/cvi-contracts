@@ -19,53 +19,65 @@ contract FeesCalculator is IFeesCalculator, Ownable {
     uint16 private constant CVI_DECIMALS = 100;
     uint256 private constant PRECISION_DECIMALS = 1e10;
 
-    uint256 public constant FUNDING_RATE_MAX = 100000;
-    uint256 public constant FUNDING_FEE_BASE_PERIOD = 1 days;
+    uint256 private constant FUNDING_FEE_MIN_RATE = 2000;
+    uint256 private constant FUNDING_FEE_MAX_RATE = 100000;
+    uint256 private constant FUNDING_FEE_BASE_PERIOD = 1 days;
 
-    uint16 public constant FUNDING_FEE_MAX_CVI_MIN = 55;
-    uint16 public constant FUNDING_FEE_MIN_CVI_MIN = 110;
-    uint16 public constant FUNDING_FEE_DIVISION_FACTOR = 5;
+    uint16 private constant MAX_FUNDING_FEE_CVI_THRESHOLD = 55;
+    uint16 private constant MIN_FUDNING_FEE_CVI_THRESHOLD = 110;
+    uint16 private constant FUNDING_FEE_DIVISION_FACTOR = 5;
 
-    uint256 public constant FUNDING_FEE_MIN_RATE = 2000;
-
-    uint16 public constant MAX_PERCENTAGE = 10000;
-    uint256 public constant MAX_FUNDING_FEE_PERCENTAGE = 1000000;
+    uint16 private constant MAX_PERCENTAGE = 10000;
+    uint256 private constant MAX_FUNDING_FEE_PERCENTAGE = 1000000;
 
     uint16 public override depositFeePercent = 0;
     uint16 public override withdrawFeePercent = 0;
     uint16 public override openPositionFeePercent = 30;
     uint16 public override closePositionFeePercent = 30;
+
+    uint16 public closePositionMaxFeePercent = 300;
+    uint256 public closePositionFeeDecayPeriod = 24 hours;
+
     uint16 public buyingPremiumFeeMaxPercent = 1000;
+    uint16 public turbulenceFeeMinPercentThreshold = 100;
     uint16 public turbulenceStepPercent = 1000;
     uint16 public buyingPremiumThreshold = 8000; // 1.0 is MAX_PERCENTAGE = 10000
+    uint16 public turbulenceIndicatorPercent = 0;
 
     uint256 public oracleHeartbeatPeriod = 1 hours;
 
-    uint16 public turbulenceIndicatorPercent = 0;
-
     address public turbulenceUpdator;
-
-    //TOOD: test setOracleHeartbeatPeriod, setBuyingPremiumFeeMax, setBuyingPremiumThreshold, setTurbulenceStep
 
     modifier onlyTurbulenceUpdator {
         require(msg.sender == turbulenceUpdator, "Not allowed");
         _;
     }
 
-    function updateTurbulenceIndicatorPercent(uint256[] memory _periods) external override onlyTurbulenceUpdator returns (uint16) {
-        for (uint8 i = 0; i < _periods.length; i++) {
+    function updateTurbulenceIndicatorPercent(uint256[] calldata _periods) external override onlyTurbulenceUpdator returns (uint16) {
+        uint16 updatedTurbulenceIndicatorPercent = turbulenceIndicatorPercent;
+
+        for (uint256 i = 0; i < _periods.length; i++) {
             if (_periods[i] < oracleHeartbeatPeriod) {
-                turbulenceIndicatorPercent = turbulenceIndicatorPercent.add(uint16(uint256(buyingPremiumFeeMaxPercent).mul(turbulenceStepPercent).div(MAX_PERCENTAGE)));
-                if (turbulenceIndicatorPercent >= buyingPremiumFeeMaxPercent) {
-                    turbulenceIndicatorPercent = buyingPremiumFeeMaxPercent;
+                if (updatedTurbulenceIndicatorPercent < buyingPremiumFeeMaxPercent) {
+                    updatedTurbulenceIndicatorPercent = updatedTurbulenceIndicatorPercent.add(uint16(uint256(buyingPremiumFeeMaxPercent).mul(turbulenceStepPercent).div(MAX_PERCENTAGE)));
+
+                    if (updatedTurbulenceIndicatorPercent > buyingPremiumFeeMaxPercent) {
+                        updatedTurbulenceIndicatorPercent = buyingPremiumFeeMaxPercent;
+                    }
                 }
             } else {
-                if (turbulenceIndicatorPercent != 0) {
-                    turbulenceIndicatorPercent = turbulenceIndicatorPercent.div(2);
+                updatedTurbulenceIndicatorPercent = updatedTurbulenceIndicatorPercent / 2;
+                if (updatedTurbulenceIndicatorPercent < turbulenceFeeMinPercentThreshold) {
+                    updatedTurbulenceIndicatorPercent = 0;
                 }
             }
         }
-        return turbulenceIndicatorPercent;
+
+        if (updatedTurbulenceIndicatorPercent != turbulenceIndicatorPercent) {
+            turbulenceIndicatorPercent = updatedTurbulenceIndicatorPercent;
+        }
+
+        return updatedTurbulenceIndicatorPercent;
     }
 
     function setTurbulenceUpdator(address _newUpdator) external override onlyOwner {
@@ -110,6 +122,11 @@ contract FeesCalculator is IFeesCalculator, Ownable {
         require(_newTurbulenceStepPercentage < MAX_PERCENTAGE, "Step exceeds maximum");
         turbulenceStepPercent = _newTurbulenceStepPercentage;
     }
+    
+    function setTurbulenceFeeMinPercentThreshold(uint16 _newTurbulenceFeeMinPercentThreshold) external override onlyOwner {
+        require(_newTurbulenceFeeMinPercentThreshold < MAX_PERCENTAGE, "Fee exceeds maximum");
+        turbulenceFeeMinPercentThreshold = _newTurbulenceFeeMinPercentThreshold;
+    }
 
     function calculateBuyingPremiumFee(uint256 _tokenAmount, uint256 _collateralRatio) external view override returns (uint256 buyingPremiumFee) {
         uint256 buyingPremiumFeePercentage = 0;
@@ -117,6 +134,8 @@ contract FeesCalculator is IFeesCalculator, Ownable {
             buyingPremiumFeePercentage = buyingPremiumFeeMaxPercent;
         } else {
             if (_collateralRatio >= uint256(buyingPremiumThreshold).mul(PRECISION_DECIMALS).div(MAX_PERCENTAGE)) {
+                // NOTE: The collateral ratio can never be bigger than 1.0 (= PERCISION_DECIMALS) in calls from the platform,
+                // so there is no issue with having a revert always occuring here on specific scenarios
                 uint256 denominator = PRECISION_DECIMALS.sub(_collateralRatio);
 
                 // Denominator is multiplied by PRECISION_DECIMALS, but is squared, so need to have a square in numerator as well
@@ -133,7 +152,7 @@ contract FeesCalculator is IFeesCalculator, Ownable {
         buyingPremiumFee = combinedPremiumFeePercentage.mul(_tokenAmount).div(MAX_PERCENTAGE);
     }
 
-    function calculateSingleUnitFundingFee(CVIValue[] memory _cviValues) external override pure returns (uint256 fundingFee) {
+    function calculateSingleUnitFundingFee(CVIValue[] calldata _cviValues) external override pure returns (uint256 fundingFee) {
         for (uint8 i = 0; i < _cviValues.length; i++) {
             fundingFee = fundingFee.add(calculateSingleUnitPeriodFundingFee(_cviValues[i]));
         }
@@ -147,25 +166,40 @@ contract FeesCalculator is IFeesCalculator, Ownable {
             return 0;
         }
 
-        uint256 fundingFeeRatePercents = FUNDING_RATE_MAX;
-        uint16 integerCVIValue = _cviValue.cviValue.div(CVI_DECIMALS);
-        if (integerCVIValue > FUNDING_FEE_MAX_CVI_MIN) {
-            if (integerCVIValue >= FUNDING_FEE_MIN_CVI_MIN) {
+        uint256 fundingFeeRatePercents = FUNDING_FEE_MAX_RATE;
+        uint16 integerCVIValue = _cviValue.cviValue / CVI_DECIMALS;
+        if (integerCVIValue > MAX_FUNDING_FEE_CVI_THRESHOLD) {
+            if (integerCVIValue >= MIN_FUDNING_FEE_CVI_THRESHOLD) {
                 fundingFeeRatePercents = FUNDING_FEE_MIN_RATE;
             } else {
-                fundingFeeRatePercents = PRECISION_DECIMALS
-                    .div(uint256(2)**(integerCVIValue.sub(FUNDING_FEE_MAX_CVI_MIN).div(FUNDING_FEE_DIVISION_FACTOR)))
-                    .div(fundingFeeCoefficients[(integerCVIValue.sub(FUNDING_FEE_MAX_CVI_MIN)) % FUNDING_FEE_DIVISION_FACTOR])
-                    .add(FUNDING_FEE_MIN_RATE);
-                
-                if (fundingFeeRatePercents > FUNDING_RATE_MAX) {
-                    fundingFeeRatePercents = FUNDING_RATE_MAX;
+                uint256 exponent = (integerCVIValue - MAX_FUNDING_FEE_CVI_THRESHOLD) / FUNDING_FEE_DIVISION_FACTOR;
+                uint256 coefficientIndex = (integerCVIValue - MAX_FUNDING_FEE_CVI_THRESHOLD) % FUNDING_FEE_DIVISION_FACTOR;
+
+                // Note: overflow is not possible as the exponent can only get larger, and other parts are constants
+                fundingFeeRatePercents = (PRECISION_DECIMALS / (2 ** exponent) / fundingFeeCoefficients[coefficientIndex]) + 
+                    FUNDING_FEE_MIN_RATE;
+
+                if (fundingFeeRatePercents > FUNDING_FEE_MAX_RATE) {
+                    fundingFeeRatePercents = FUNDING_FEE_MAX_RATE;
                 }
             }
         }
 
-        // Split calculation to prevent stack too deep error
-        uint256 multiplication = uint256(_cviValue.cviValue).mul(PRECISION_DECIMALS).mul(fundingFeeRatePercents).mul(_cviValue.period);
-        return multiplication.div(FUNDING_FEE_BASE_PERIOD).div(MAX_CVI_VALUE).div(MAX_FUNDING_FEE_PERCENTAGE);
+        return PRECISION_DECIMALS.mul(uint256(_cviValue.cviValue)).mul(fundingFeeRatePercents).mul(_cviValue.period) /
+            FUNDING_FEE_BASE_PERIOD / MAX_CVI_VALUE / MAX_FUNDING_FEE_PERCENTAGE;
+    }
+
+    function calculateClosePositionFeePercent(uint256 creationTimestamp) external view override returns (uint16) {
+        if (block.timestamp - creationTimestamp >= closePositionFeeDecayPeriod) {
+            return closePositionFeePercent;
+        }
+
+        uint16 decay = uint16(uint256(closePositionMaxFeePercent - closePositionFeePercent).mul(block.timestamp.sub(creationTimestamp)) / 
+            closePositionFeePercent);
+        return closePositionMaxFeePercent - decay;
+    }
+
+    function calculateWithdrawFeePercent(uint256) external view override returns (uint16) {
+        return withdrawFeePercent;
     }
 }

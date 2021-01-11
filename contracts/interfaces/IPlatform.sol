@@ -22,8 +22,8 @@ interface IPlatform {
     function withdraw(uint256 tokenAmount, uint256 maxLPTokenBurnAmount) external returns (uint256 burntAmount, uint256 withdrawnAmount);
     function withdrawLPTokens(uint256 lpTokenAmount) external returns (uint256 burntAmount, uint256 withdrawnAmount);
 
-    function openPosition(uint256 tokenAmount, uint16 _maxCVI) external returns (uint256 positionUnitsAmount);
-    function closePosition(uint256 positionUnitsAmount, uint16 _minCVI) external returns (uint256 tokenAmount);
+    function openPosition(uint256 tokenAmount, uint16 maxCVI) external returns (uint256 positionUnitsAmount);
+    function closePosition(uint256 positionUnitsAmount, uint16 minCVI) external returns (uint256 tokenAmount);
 
     function liquidatePositions(address[] calldata positionOwners) external returns (uint256 finderFeeAmount);
 
@@ -34,10 +34,12 @@ interface IPlatform {
     function setFeesModel(IFeesModel newModel) external;
     function setCVIOracle(ICVIOracle newOracle) external;
     function setRewards(IRewards newRewards) external;
-    function setLiquidation(ILiquidation _newLiquidation) external;
+    function setLiquidation(ILiquidation newLiquidation) external;
 
     function setLPLockupPeriod(uint256 newLPLockupPeriod) external;
     function setBuyersLockupPeriod(uint256 newBuyersLockupPeriod) external;
+
+    function setEmergencyWithdrawAllowed(bool newEmergencyWithdrawAllowed) external;
 
     function getToken() external view returns (IERC20);
 

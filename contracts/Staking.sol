@@ -15,26 +15,27 @@ contract Staking is IStaking, IFeesCollector, Ownable {
 	using SafeMath for uint256;
 	using SafeERC20 for IERC20;
 
-	uint256 private constant PRECISION_DECIMALS = 1e18;
+	uint256 public constant PRECISION_DECIMALS = 1e18;
 
-	uint256 private totalStaked;
+	uint256 public totalStaked;
 
 	IERC20[] private claimableTokens;
 	IERC20[] private otherTokens;
 
-	mapping(IERC20 => bool) private supportedTokens;
+	mapping(IERC20 => bool) private claimableTokensSupported;
+  mapping(IERC20 => bool) private otherTokensSupported;
 
-	mapping(IERC20 => uint256) private totalProfits;
+	mapping(IERC20 => uint256) public totalProfits;
 
     mapping(address => mapping(IERC20 => uint256)) private lastProfits;
     mapping(address => mapping(IERC20 => uint256)) private savedProfits;
 
-    mapping(address => uint256) private stakes;
-    mapping(address => uint256) private stakeTimestamps;
+    mapping(address => uint256) public stakes;
+    mapping(address => uint256) public stakeTimestamps;
 
     IERC20 private immutable cviToken;
     IWETH private immutable wethToken;
-    address private immutable fallbackRecipient;
+    address public immutable fallbackRecipient;
 
     IUniswapV2Router02 private immutable uniswapRouter;
 
@@ -47,11 +48,19 @@ contract Staking is IStaking, IFeesCollector, Ownable {
     	fallbackRecipient = msg.sender;
     }
 
+    receive() external payable override {
+
+    }
+
     function sendProfit(uint256 _amount, IERC20 _token) external override {
-    	require(supportedTokens[_token], "Token not supported");
+        bool isClaimableToken = claimableTokensSupported[_token];
+        bool isOtherToken = otherTokensSupported[_token];
+    	require(isClaimableToken || isOtherToken, "Token not supported");
 
     	if (totalStaked > 0) {
-    		addProfit(_amount, _token);
+            if (isClaimableToken) {
+    		  addProfit(_amount, _token);
+            }
     		_token.safeTransferFrom(msg.sender, address(this), _amount);
     	} else {
     		_token.safeTransferFrom(msg.sender, fallbackRecipient, _amount);
@@ -95,47 +104,59 @@ contract Staking is IStaking, IFeesCollector, Ownable {
     	require(profit > 0, "No profit for token");
     }
 
-    function claimAllProfits() external override returns (uint256[] memory profits) {
+    function claimAllProfits() external override returns (uint256[] memory) {
+        uint256[] memory profits = new uint256[](claimableTokens.length); 
     	saveProfit(claimableTokens, msg.sender, stakes[msg.sender]);
 
     	uint256 totalProfit = 0;
-    	for (uint256 tokenIndex = 0; tokenIndex < claimableTokens.length; tokenIndex = tokenIndex.add(1)) {
-    		profits[tokenIndex] = _claimProfit(claimableTokens[tokenIndex]);
-    		totalProfit = totalProfit.add(profits[tokenIndex]);
+    	for (uint256 tokenIndex = 0; tokenIndex < claimableTokens.length; tokenIndex++) {
+            uint256 currProfit = _claimProfit(claimableTokens[tokenIndex]);
+    		profits[tokenIndex] = currProfit;
+            totalProfit = totalProfit.add(currProfit);
     	}
 
     	require(totalProfit > 0, "No profit");
+
+        return profits;
     }
 
     function addClaimableToken(IERC20 _newClaimableToken) external override onlyOwner {
-        _addToken(claimableTokens, _newClaimableToken);
+        _addToken(claimableTokens, claimableTokensSupported, _newClaimableToken);
     }
 
     function removeClaimableToken(IERC20 _removedClaimableToken) external override onlyOwner {
-        _removeToken(claimableTokens, _removedClaimableToken);
+        _removeToken(claimableTokens, claimableTokensSupported, _removedClaimableToken);
     }
 
     function addToken(IERC20 _newToken) external override onlyOwner {
-        _addToken(otherTokens, _newToken);
+        _addToken(otherTokens, otherTokensSupported, _newToken);
     }
 
     function removeToken(IERC20 _removedToken) external override onlyOwner {
-        _removeToken(otherTokens, _removedToken);
+        _removeToken(otherTokens, otherTokensSupported, _removedToken);
     }
 
     function convertFunds() external override {
-    	for (uint256 tokenIndex = 0; tokenIndex < otherTokens.length; tokenIndex = tokenIndex.add(1)) {
+        bool didConvert = false;
+    	for (uint256 tokenIndex = 0; tokenIndex < otherTokens.length; tokenIndex++) {
     		IERC20 token = otherTokens[tokenIndex];
+            uint256 balance = token.balanceOf(address(this));
 
-    		address[] memory path = new address[](2);
-        	path[0] = address(token);
-        	path[1] = address(wethToken);
+            if (balance > 0) {
+                didConvert = true;
 
-    		uint256[] memory amounts = 
-    			uniswapRouter.swapExactTokensForTokens(token.balanceOf(address(this)), 
-    				0, path, address(this), block.timestamp);
-    		addProfit(amounts[1], token);
+        		address[] memory path = new address[](2);
+            	path[0] = address(token);
+            	path[1] = address(wethToken);
+
+        		uint256[] memory amounts = 
+        			uniswapRouter.swapExactTokensForTokens(token.balanceOf(address(this)), 
+        				0, path, address(this), block.timestamp + 60 * 60);
+                addProfit(amounts[1], IERC20(address(wethToken)));
+            }
     	}
+
+        require(didConvert, "No funds to convert");
     }
 
     function setStakingLockupTime(uint256 _newLockupTime) external override onlyOwner {
@@ -146,8 +167,16 @@ contract Staking is IStaking, IFeesCollector, Ownable {
         return savedProfits[_account][_token].add(unsavedProfit(_account, stakes[_account], _token));
     }
 
+    function getClaimableTokens() external view override returns (IERC20[] memory) {
+        return claimableTokens;
+    }
+
+    function getOtherTokens() external view override returns (IERC20[] memory) {
+        return otherTokens;
+    }
+
     function _claimProfit(IERC20 _token) private returns (uint256 profit) {
-    	require(supportedTokens[_token], "Token not supported");
+    	require(claimableTokensSupported[_token], "Token not supported");
 		profit = savedProfits[msg.sender][_token];
 
 		if (profit > 0) {
@@ -156,22 +185,22 @@ contract Staking is IStaking, IFeesCollector, Ownable {
 
 			if (address(_token) == address(wethToken)) {
 				wethToken.withdraw(profit);
-				msg.sender.transfer(profit);
+                msg.sender.transfer(profit);
 			} else {
 				_token.safeTransfer(msg.sender, profit);
 			}
 		}
     }
 
-    function _addToken(IERC20[] storage _tokens, IERC20 _newToken) private {
-    	require(!supportedTokens[_newToken], "Token already added");
-    	supportedTokens[_newToken] = true;
+    function _addToken(IERC20[] storage _tokens, mapping(IERC20 => bool) storage _supportedTokens, IERC20 _newToken) private {
+    	require(!_supportedTokens[_newToken], "Token already added");
+    	_supportedTokens[_newToken] = true;
     	_tokens.push(_newToken);
     	_newToken.approve(address(uniswapRouter), uint256(-1));
     }
 
-    function _removeToken(IERC20[] storage _tokens, IERC20 _removedTokenAddress) private {
-    	require(supportedTokens[_removedTokenAddress], "Token not supported");
+    function _removeToken(IERC20[] storage _tokens, mapping(IERC20 => bool) storage _supportedTokens, IERC20 _removedTokenAddress) private {
+    	require(_supportedTokens[_removedTokenAddress], "Token not supported");
 
     	bool isFound = false;
     	for (uint256 tokenIndex = 0; tokenIndex < _tokens.length; tokenIndex = tokenIndex.add(1)) {
@@ -184,7 +213,7 @@ contract Staking is IStaking, IFeesCollector, Ownable {
     	}
     	require(isFound, "Token not found");
 
-    	supportedTokens[_removedTokenAddress] = false;
+    	_supportedTokens[_removedTokenAddress] = false;
     }
 
     function addProfit(uint256 _amount, IERC20 _token) private {

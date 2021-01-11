@@ -43,8 +43,15 @@ contract Rewards is IRewards, Ownable {
         totalRewardsPerDay[today] = totalRewardsPerDay[today].add(_positionUnits);
         dailyPerAddressReward[_account][today] = dailyPerAddressReward[_account][today].add(_positionUnits);
     }
-    
-    function claimReward(uint256 _openPositionDay) external override {
+
+    function claimReward(uint256[] memory _openPositionDays) external override {
+        require(_openPositionDays.length > 0, "No days provided");
+        for (uint256 i = 0; i < _openPositionDays.length; i++) {
+            _claimReward(_openPositionDays[i]);
+        }
+    }
+
+    function _claimReward(uint256 _openPositionDay) internal {
         uint256 today = block.timestamp / 1 days;
         require(today > _openPositionDay, "Open day is today or future");
 

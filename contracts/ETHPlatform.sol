@@ -29,8 +29,7 @@ contract ETHPlatform is Platform, IETHPlatform {
 
     function withdrawETH(uint256 _lpTokensAmount, uint256 _maxLPTokenBurnAmount) external override returns (uint256 burntAmount, uint256 withdrawnAmount) {
     	(burntAmount, withdrawnAmount) = _withdraw(_lpTokensAmount, false, _maxLPTokenBurnAmount, false);
-        IWETH(WETH).withdraw(withdrawnAmount);
-        msg.sender.transfer(withdrawnAmount);
+        sendETH(withdrawnAmount);
     }
 
     function withdrawLPTokensETH(uint256 _lpTokensAmount) external override returns (uint256 burntAmount, uint256 withdrawnAmount) {

@@ -22,4 +22,9 @@ interface IStaking {
     function setStakingLockupTime(uint256 newLockupTime) external;
 
     function profitOf(address account, IERC20 token) external view returns (uint256);
+
+    function getClaimableTokens() external view returns (IERC20[] memory);
+    function getOtherTokens() external view returns (IERC20[] memory);
+
+    receive() external payable;
 }

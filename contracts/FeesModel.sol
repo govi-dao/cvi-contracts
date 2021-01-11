@@ -61,31 +61,28 @@ contract FeesModel is IFeesModel, Ownable {
 
         uint80 currRoundId = latestOracleRoundId;
         if (cviValuesNumLeft > 2) {
-            currRoundId = periodStartRoundId.add(roundsJump.div(ROUND_JUMPS_PRECISION));
+            currRoundId = periodStartRoundId.add(roundsJump / ROUND_JUMPS_PRECISION);
         }
 
         uint256 lastCVITimestamp = latestSnapshotTimestamp;
-        IFeesCalculator.CVIValue[] memory cviValues = new IFeesCalculator.CVIValue[](cviValuesNumLeft);
         uint8 currCVIValueIndex = 0;
 
+        IFeesCalculator.CVIValue[] memory cviValues = new IFeesCalculator.CVIValue[](cviValuesNumLeft);
         cviValuesNumLeft = cviValuesNumLeft.sub(1);
+
+        uint256[] memory cviPeriods = new uint256[](cviValuesNumLeft);
 
         bool shouldUpdateTurbulence = false;
 
-        uint256[] memory cviPeriods = new uint256[](cviValuesNumLeft);
-        if (cviValuesNumLeft > 0) {
-            shouldUpdateTurbulence = true;
-        }
-
         while (cviValuesNumLeft > 0) {
-            (uint16 currCVIValue, uint256 currCVITimestamp) = cviOracle.getCVIRoundData(currRoundId);
+            shouldUpdateTurbulence = true;
 
-            if (shouldUpdateTurbulence) {
-                if (cviPeriods.length == 0) {
-                    cviPeriods[0] = currCVITimestamp.sub(latestCVITimestamp);
-                } else {
-                    cviPeriods[currCVIValueIndex] = currCVITimestamp.sub(lastCVITimestamp);
-                }
+            (uint16 currCVIValue, uint256 currCVITimestamp) = cviOracle.getCVIRoundData(currRoundId);
+            
+            if (currCVIValueIndex == 0) {
+                cviPeriods[currCVIValueIndex] = currCVITimestamp.sub(latestCVITimestamp);
+            } else {
+                cviPeriods[currCVIValueIndex] = currCVITimestamp.sub(lastCVITimestamp);
             }
 
             cviValues[currCVIValueIndex] = IFeesCalculator.CVIValue(currCVITimestamp.sub(lastCVITimestamp), lastCVIValue);
@@ -94,12 +91,12 @@ contract FeesModel is IFeesModel, Ownable {
             lastCVITimestamp = currCVITimestamp;
             lastCVIValue = currCVIValue;
 
-            cviValuesNumLeft = cviValuesNumLeft.sub(1);
+            cviValuesNumLeft = cviValuesNumLeft - 1;
 
             if (cviValuesNumLeft == 1) {
                 currRoundId = latestOracleRoundId; // Always round to latest round on last jump
             } else if (cviValuesNumLeft > 1) {
-                currRoundId = periodStartRoundId.add(roundsJump.mul(currCVIValueIndex).div(ROUND_JUMPS_PRECISION));
+                currRoundId = periodStartRoundId.add(roundsJump.mul(currCVIValueIndex) / ROUND_JUMPS_PRECISION);
             }
         }
 
