@@ -38,7 +38,7 @@ contract FeesCalculator is IFeesCalculator, Ownable {
     uint16 public closePositionMaxFeePercent = 300;
     uint256 public closePositionFeeDecayPeriod = 24 hours;
 
-    uint16 public buyingPremiumFeeMaxPercent = 1000;
+    uint16 public override buyingPremiumFeeMaxPercent = 1000;
     uint16 public turbulenceFeeMinPercentThreshold = 100;
     uint16 public turbulenceStepPercent = 1000;
     uint16 public buyingPremiumThreshold = 8000; // 1.0 is MAX_PERCENTAGE = 10000
@@ -190,12 +190,12 @@ contract FeesCalculator is IFeesCalculator, Ownable {
     }
 
     function calculateClosePositionFeePercent(uint256 creationTimestamp) external view override returns (uint16) {
-        if (block.timestamp - creationTimestamp >= closePositionFeeDecayPeriod) {
+        if (block.timestamp.sub(creationTimestamp) >= closePositionFeeDecayPeriod) {
             return closePositionFeePercent;
         }
 
         uint16 decay = uint16(uint256(closePositionMaxFeePercent - closePositionFeePercent).mul(block.timestamp.sub(creationTimestamp)) / 
-            closePositionFeePercent);
+            closePositionFeeDecayPeriod);
         return closePositionMaxFeePercent - decay;
     }
 
