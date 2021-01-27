@@ -9,6 +9,7 @@ contract FakeWETH is FakeERC20, IWETH {
     }
 
     function deposit() external payable override {
+    	
     }
 
     function withdraw(uint256 _amount) external override {

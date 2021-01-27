@@ -10,6 +10,7 @@ interface IFeesModel {
 
     function setCVIOracle(ICVIOracle newOracle) external;
     function setFeesCalculator(IFeesCalculator newCalculator) external;
+    function setLatestOracleRoundId(uint80 newOracleRoundId) external;
     function setMaxOracleValuesUsed(uint80 newMaxOracleValuesUsed) external;
 
     function calculateFundingFees(uint256 startTime, uint256 positionUnitsAmount) external view returns (uint256);

@@ -2,6 +2,7 @@ const { BN } = require('@openzeppelin/test-helpers');
 
 const RATIO_DECIMALS = 1e10;
 const RATIO_DECIMALS_BN = new BN(RATIO_DECIMALS);
+const SECONDS_PER_HOUR = 60 * 60;
 const SECONDS_PER_DAY = 24 * 60 * 60;
 
 const calculateSingleUnitFee = (cviValue, period) => {
@@ -26,4 +27,22 @@ const calculateSingleUnitFee = (cviValue, period) => {
     return (new BN(cviValue)).mul(RATIO_DECIMALS_BN).mul(fundingFeeRate).mul(new BN(period)).div(new BN(SECONDS_PER_DAY)).div(new BN(20000)).div(new BN(1000000));
 };
 
+const calculateNextTurbulence = (currTurbulence, periods) => {
+	let nextTurbulence = currTurbulence;
+    for (let i = 0; i < periods.length; i++) {
+        if (periods[i] >= SECONDS_PER_HOUR) {
+            nextTurbulence = currTurbulence.div(new BN(2));
+        } else {
+            nextTurbulence = currTurbulence.add(new BN(100));
+        }
+    }
+
+    if (nextTurbulence.gt(new BN(1000))) {
+        nextTurbulence = new BN(1000);
+    }
+
+    return nextTurbulence;
+};
+
 exports.calculateSingleUnitFee = calculateSingleUnitFee;
+exports.calculateNextTurbulence = calculateNextTurbulence;

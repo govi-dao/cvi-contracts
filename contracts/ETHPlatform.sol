@@ -11,24 +11,27 @@ import "./Platform.sol";
 
 contract ETHPlatform is Platform, IETHPlatform {
 
-    address public constant WETH = address(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2);
+    IWETH public immutable wethToken;
 
-    constructor(string memory _lpTokenName, string memory _lpTokenSymbolName, 
+    constructor(address _wethToken, string memory _lpTokenName, string memory _lpTokenSymbolName, uint256 _initialTokenToLPTokenRate,
         IFeesModel _feesModel, 
-        IFeesCollector _feesCollector,
         IFeesCalculator _feesCalculator,
-        IRewards _rewards,
         ICVIOracle _cviOracle,
-        ILiquidation _liquidation) public Platform(IERC20(WETH), _lpTokenName, _lpTokenSymbolName, _feesModel, _feesCalculator, _cviOracle, _liquidation) {
+        ILiquidation _liquidation) public Platform(IERC20(_wethToken), _lpTokenName, _lpTokenSymbolName, _initialTokenToLPTokenRate, _feesModel, _feesCalculator, _cviOracle, _liquidation) {
+            wethToken = IWETH(_wethToken);
+    }
+
+    receive() external payable override {
+
     }
 
     function depositETH(uint256 _minLPTokenAmount) external override payable returns (uint256 lpTokenAmount) {
-        IWETH(WETH).deposit{value: msg.value}();
+        wethToken.deposit{value: msg.value}();
         lpTokenAmount = _deposit(msg.value, _minLPTokenAmount, false);
     }
 
-    function withdrawETH(uint256 _lpTokensAmount, uint256 _maxLPTokenBurnAmount) external override returns (uint256 burntAmount, uint256 withdrawnAmount) {
-    	(burntAmount, withdrawnAmount) = _withdraw(_lpTokensAmount, false, _maxLPTokenBurnAmount, false);
+    function withdrawETH(uint256 _tokenAmount, uint256 _maxLPTokenBurnAmount) external override returns (uint256 burntAmount, uint256 withdrawnAmount) {
+    	(burntAmount, withdrawnAmount) = _withdraw(_tokenAmount, false, _maxLPTokenBurnAmount, false);
         sendETH(withdrawnAmount);
     }
 
@@ -38,7 +41,7 @@ contract ETHPlatform is Platform, IETHPlatform {
     }
 
     function openPositionETH(uint16 _maxCVI) external override payable returns (uint256 positionUnitsAmount) {
-        IWETH(WETH).deposit{value: msg.value}();
+        wethToken.deposit{value: msg.value}();
         positionUnitsAmount = _openPosition(msg.value, _maxCVI, false);
     }
 
@@ -48,7 +51,7 @@ contract ETHPlatform is Platform, IETHPlatform {
     }
 
     function sendETH(uint256 _amount) private {
-    	IWETH(WETH).withdraw(_amount);
+    	wethToken.withdraw(_amount);
         msg.sender.transfer(_amount);
     }
 }

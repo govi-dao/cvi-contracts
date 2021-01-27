@@ -74,6 +74,9 @@ const validateTurbulenceUpdate = async periods => {
     for (let i = 0; i < periods.length; i++) {
         if (periods[i] >= SECONDS_PER_HOUR) {
             currTurbulence = currTurbulence.div(new BN(2));
+            if (currTurbulence.lt(new BN(100))) {
+                currTurbulence = new BN(0);
+            }
         } else {
             currTurbulence = currTurbulence.add(new BN(100));
         }

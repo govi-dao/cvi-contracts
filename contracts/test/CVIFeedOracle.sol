@@ -5,14 +5,10 @@ import "../interfaces/AggregatorV2V3Interface.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
 /**
- * @title MockV3Aggregator
- * @notice Based on the FluxAggregator contract
- * @notice Use this contract when you need to test
- * other contract's ability to read data from an
- * aggregator contract, but how the aggregator got
- * its answer is unimportant
+ * @title CVI Feed Oracle beta phase
+ * @notice Based on the Chainlink FluxAggregator contract
  */
-contract TestnetOracle is AggregatorV2V3Interface, Ownable {
+contract CVIFeedOracle is AggregatorV2V3Interface, Ownable {
   uint256 constant public override version = 0;
 
   uint8 public override decimals;
@@ -111,6 +107,6 @@ contract TestnetOracle is AggregatorV2V3Interface, Ownable {
     override
     returns (string memory)
   {
-    return "Testnet Oracle";
+    return "CVI Feed Oracle";
   }
 }

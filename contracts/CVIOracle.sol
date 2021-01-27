@@ -11,8 +11,8 @@ contract CVIOracle is ICVIOracle {
 
 	using SafeMath for uint256;
 
-    uint256 private constant CVI_DECIMALS_TRUNCATE = 10000;
-    uint256 private constant MAX_CVI_VALUE = 200000000;
+    uint256 private constant CVI_DECIMALS_TRUNCATE = 1e16;
+    uint256 private constant MAX_CVI_VALUE = 200e18;
 
     AggregatorV3Interface public immutable cviAggregator;
 

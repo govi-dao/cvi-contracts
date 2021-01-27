@@ -101,7 +101,19 @@ contract FeesCalculator is IFeesCalculator, Ownable {
 
     function setClosePositionFee(uint16 _newClosePositionFeePercentage) external override onlyOwner {
         require(_newClosePositionFeePercentage < MAX_PERCENTAGE, "Fee exceeds maximum");
+        require(_newClosePositionFeePercentage <= closePositionMaxFeePercent, "Min fee above max fee");
         closePositionFeePercent = _newClosePositionFeePercentage;
+    }
+
+    function setClosePositionMaxFee(uint16 _newClosePositionMaxFeePercentage) external override onlyOwner {
+        require(_newClosePositionMaxFeePercentage < MAX_PERCENTAGE, "Fee exceeds maximum");
+        require(_newClosePositionMaxFeePercentage >= closePositionFeePercent, "Max fee below min fee");
+        closePositionMaxFeePercent = _newClosePositionMaxFeePercentage;
+    }
+
+    function setClosePositionFeeDecay(uint256 _newClosePositionFeeDecayPeriod) external override onlyOwner {
+        require(_newClosePositionFeeDecayPeriod > 0, "Period must be positive");
+        closePositionFeeDecayPeriod = _newClosePositionFeeDecayPeriod;
     }
 
     function setOracleHeartbeatPeriod(uint256 _newOracleHeartbeatPeriod) external override onlyOwner {

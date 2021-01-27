@@ -17,6 +17,8 @@ interface IFeesCalculator {
     function setWithdrawFee(uint16 newWithdrawFeePercentage) external;
     function setOpenPositionFee(uint16 newOpenPositionFeePercentage) external;
     function setClosePositionFee(uint16 newClosePositionFeePercentage) external;
+    function setClosePositionMaxFee(uint16 newClosePositionMaxFeePercentage) external;
+    function setClosePositionFeeDecay(uint256 newClosePositionFeeDecayPeriod) external;
     
     function setOracleHeartbeatPeriod(uint256 newOracleHeartbeatPeriod) external;
     function setBuyingPremiumFeeMax(uint16 newBuyingPremiumFeeMaxPercentage) external;

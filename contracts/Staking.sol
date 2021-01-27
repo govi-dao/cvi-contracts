@@ -12,18 +12,18 @@ import "./interfaces/IWETH.sol";
 
 contract Staking is IStaking, IFeesCollector, Ownable {
 
-	using SafeMath for uint256;
-	using SafeERC20 for IERC20;
+    using SafeMath for uint256;
+    using SafeERC20 for IERC20;
 
-	uint256 public constant PRECISION_DECIMALS = 1e18;
+    uint256 public constant PRECISION_DECIMALS = 1e18;
 
-	uint256 public totalStaked;
+    uint256 public totalStaked;
 
-	IERC20[] private claimableTokens;
-	IERC20[] private otherTokens;
+    IERC20[] private claimableTokens;
+    IERC20[] private otherTokens;
 
 	mapping(IERC20 => bool) private claimableTokensSupported;
-  mapping(IERC20 => bool) private otherTokensSupported;
+    mapping(IERC20 => bool) private otherTokensSupported;
 
 	mapping(IERC20 => uint256) public totalProfits;
 
@@ -41,11 +41,14 @@ contract Staking is IStaking, IFeesCollector, Ownable {
 
     uint256 public stakeLockupTime = 1 hours;
 
+	uint256 public creationTimestamp;
+
     constructor(IERC20 _cviToken, IUniswapV2Router02 _uniswapRouter) public {
     	cviToken = _cviToken;
     	uniswapRouter = _uniswapRouter;
     	wethToken = IWETH(_uniswapRouter.WETH());
     	fallbackRecipient = msg.sender;
+		creationTimestamp = block.timestamp;
     }
 
     receive() external payable override {
@@ -130,10 +133,12 @@ contract Staking is IStaking, IFeesCollector, Ownable {
 
     function addToken(IERC20 _newToken) external override onlyOwner {
         _addToken(otherTokens, otherTokensSupported, _newToken);
+        _newToken.safeApprove(address(uniswapRouter), uint256(-1));
     }
 
     function removeToken(IERC20 _removedToken) external override onlyOwner {
         _removeToken(otherTokens, otherTokensSupported, _removedToken);
+        _removedToken.safeApprove(address(uniswapRouter), 0);
     }
 
     function convertFunds() external override {
@@ -151,7 +156,7 @@ contract Staking is IStaking, IFeesCollector, Ownable {
 
         		uint256[] memory amounts = 
         			uniswapRouter.swapExactTokensForTokens(token.balanceOf(address(this)), 
-        				0, path, address(this), block.timestamp + 60 * 60);
+        				0, path, address(this), block.timestamp);
                 addProfit(amounts[1], IERC20(address(wethToken)));
             }
     	}
@@ -196,7 +201,6 @@ contract Staking is IStaking, IFeesCollector, Ownable {
     	require(!_supportedTokens[_newToken], "Token already added");
     	_supportedTokens[_newToken] = true;
     	_tokens.push(_newToken);
-    	_newToken.approve(address(uniswapRouter), uint256(-1));
     }
 
     function _removeToken(IERC20[] storage _tokens, mapping(IERC20 => bool) storage _supportedTokens, IERC20 _removedTokenAddress) private {

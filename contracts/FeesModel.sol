@@ -51,6 +51,8 @@ contract FeesModel is IFeesModel, Ownable {
         (uint16 lastCVIValue, uint256 latestCVITimestamp) = cviOracle.getCVIRoundData(periodStartRoundId);
         (,latestOracleRoundId) = cviOracle.getCVILatestRoundData();
 
+        require(latestOracleRoundId >= periodStartRoundId, "Bad round id");
+
         uint80 cviValuesNumLeft = latestOracleRoundId.sub(periodStartRoundId).add(1);
         uint80 roundsJump = ROUND_JUMPS_PRECISION;
 
@@ -70,6 +72,7 @@ contract FeesModel is IFeesModel, Ownable {
         IFeesCalculator.CVIValue[] memory cviValues = new IFeesCalculator.CVIValue[](cviValuesNumLeft);
         cviValuesNumLeft = cviValuesNumLeft.sub(1);
 
+        // Note: this line is valid even when cviValuesNumLeft == 0
         uint256[] memory cviPeriods = new uint256[](cviValuesNumLeft);
 
         bool shouldUpdateTurbulence = false;
@@ -119,6 +122,10 @@ contract FeesModel is IFeesModel, Ownable {
 
     function setFeesCalculator(IFeesCalculator _newCalculator) external override onlyOwner {
         feesCalculator = _newCalculator;
+    }
+
+    function setLatestOracleRoundId(uint80 _newOracleRoundId) external override onlyOwner {
+        latestOracleRoundId = _newOracleRoundId;
     }
 
     function setMaxOracleValuesUsed(uint80 _newMaxOracleValuesUsed) external override onlyOwner {

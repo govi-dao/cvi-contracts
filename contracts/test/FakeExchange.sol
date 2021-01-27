@@ -23,7 +23,7 @@ contract FakeExchange {
         address to,
         uint deadline
     ) external returns (uint[] memory) {
-        require(deadline > block.timestamp, "Fake Uniswap: Deadline in past");
+        require(deadline >= block.timestamp, "Fake Uniswap: Deadline in past");
 
         uint[] memory amountsOut = getAmountsOut(amountIn, path);
         uint amountOut = amountsOut[0];

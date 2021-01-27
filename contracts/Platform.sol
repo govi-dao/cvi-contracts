@@ -23,13 +23,14 @@ contract Platform is IPlatform, Ownable, ERC20 {
         uint256 positionAddressesIndex;    
     }  
 
-    uint256 public constant INITIAL_RATE = 1e18;
     uint256 public constant MAX_FEE_PERCENTAGE = 10000;
     uint256 public constant MAX_PERCENTAGE = 1000000;
 
     uint256 public constant PRECISION_DECIMALS = 1e10;
 
     uint256 public constant MAX_CVI_VALUE = 20000;
+
+    uint256 public immutable initialTokenToLPTokenRate;
 
     IERC20 private token;
     ICVIOracle private cviOracle;
@@ -54,13 +55,14 @@ contract Platform is IPlatform, Ownable, ERC20 {
 
     address[] private holdersAddresses;
 
-    constructor(IERC20 _token, string memory _lpTokenName, string memory _lpTokenSymbolName, 
+    constructor(IERC20 _token, string memory _lpTokenName, string memory _lpTokenSymbolName, uint256 _initialTokenToLPTokenRate,
         IFeesModel _feesModel,
         IFeesCalculator _feesCalculator,
         ICVIOracle _cviOracle,
         ILiquidation _liquidation) public ERC20(_lpTokenName, _lpTokenSymbolName) {
 
         token = _token;
+        initialTokenToLPTokenRate = _initialTokenToLPTokenRate;
         feesModel = _feesModel;
         feesCalculator = _feesCalculator;
         cviOracle = _cviOracle;
@@ -105,9 +107,10 @@ contract Platform is IPlatform, Ownable, ERC20 {
     }
 
     function setFeesCollector(IFeesCollector _newCollector) external override onlyOwner {
-        require(address(_newCollector) != address(0));
         feesCollector = _newCollector;
-        token.approve(address(feesCollector), uint256(-1));
+        if (address(_newCollector) != address(0)) {
+            token.safeApprove(address(feesCollector), uint256(-1));
+        }
     }
 
     function setFeesModel(IFeesModel _newModel) external override onlyOwner {
@@ -193,11 +196,15 @@ contract Platform is IPlatform, Ownable, ERC20 {
         uint256 tokenAmountToDeposit = _tokenAmount.sub(depositFee);
         uint256 supply = totalSupply();
         uint256 balance = totalBalance();
+
+        if (!_transferTokens) {
+            balance = balance.sub(_tokenAmount);
+        }
     
         if (supply > 0 && balance > 0) {
                 lpTokenAmount = tokenAmountToDeposit.mul(supply).div(balance);
         } else {
-                lpTokenAmount = tokenAmountToDeposit.mul(INITIAL_RATE);
+                lpTokenAmount = tokenAmountToDeposit.mul(initialTokenToLPTokenRate);
         }
 
         emit Deposit(msg.sender, _tokenAmount, lpTokenAmount, depositFee);
@@ -214,7 +221,7 @@ contract Platform is IPlatform, Ownable, ERC20 {
     }
 
     function _withdraw(uint256 _tokenAmount, bool _shouldBurnMax, uint256 _maxLPTokenBurnAmount, bool _transferTokens) internal returns (uint256 burntAmount, uint256 withdrawnAmount) {
-        require(emergencyWithdrawAllowed || lastDepositTimestamp[msg.sender].add(lpsLockupPeriod) <= block.timestamp, "Funds are locked");
+        require(lastDepositTimestamp[msg.sender].add(lpsLockupPeriod) <= block.timestamp, "Funds are locked");
 
         updateSnapshots();
 
@@ -260,9 +267,14 @@ contract Platform is IPlatform, Ownable, ERC20 {
         uint256 positionUnitsAmountWithoutPremium =  _tokenAmount.sub(openPositionFee).mul(MAX_CVI_VALUE).div(cviValue);
         uint256 minPositionUnitsAmount = positionUnitsAmountWithoutPremium.mul(MAX_FEE_PERCENTAGE.sub(feesCalculator.buyingPremiumFeeMaxPercent())).div(MAX_FEE_PERCENTAGE);
 
+        uint256 balance = token.balanceOf(address(this));
+        if (!_transferTokens) {
+            balance = balance.sub(_tokenAmount);
+        }
+
         uint256 collateralRatio = 0;
-        if (token.balanceOf(address(this)) > 0) {
-            collateralRatio = (totalPositionUnitsAmount.add(minPositionUnitsAmount)).mul(PRECISION_DECIMALS).div(token.balanceOf(address(this)).add(_tokenAmount).sub(openPositionFee));
+        if (balance > 0) {
+            collateralRatio = (totalPositionUnitsAmount.add(minPositionUnitsAmount)).mul(PRECISION_DECIMALS).div(balance.add(_tokenAmount).sub(openPositionFee));
         }
         uint256 buyingPremiumFee = feesCalculator.calculateBuyingPremiumFee(_tokenAmount, collateralRatio);
         
@@ -291,10 +303,10 @@ contract Platform is IPlatform, Ownable, ERC20 {
             token.safeTransferFrom(msg.sender, address(this), _tokenAmount);
         }
 
-        // Note: checking collateral ratio after transfering tokens to cover cases where token transfer induces a fee, for example
-        require(positionUnitsAmount.add(totalPositionUnitsAmount) <= token.balanceOf(address(this)), "Not enough liquidity");
-
         collectProfit(openPositionFee);
+
+        // Note: checking collateral ratio after transfering tokens to cover cases where token transfer induces a fee, for example
+        require(totalPositionUnitsAmount <= token.balanceOf(address(this)), "Not enough liquidity");
 
         if (address(rewards) != address(0)) {
             rewards.reward(msg.sender, positionUnitsAmount);
@@ -314,6 +326,7 @@ contract Platform is IPlatform, Ownable, ERC20 {
 
         Position storage position = positions[msg.sender];
         uint256 positionBalance = _positionUnitsAmount.mul(cviValue).div(MAX_CVI_VALUE);
+        uint256 tokenAmountBeforeFees = positionBalance;
         uint256 fundingFees = feesModel.calculateFundingFees(position.creationTimestamp, block.timestamp, _positionUnitsAmount);
         uint256 realizedPendingFees = position.pendingFees.mul(_positionUnitsAmount).div(position.positionUnitsAmount);
 
@@ -337,10 +350,11 @@ contract Platform is IPlatform, Ownable, ERC20 {
             removePosition(msg.sender);
         }
 
-        emit ClosePosition(msg.sender, positionBalance, closePositionFee.add(realizedPendingFees).add(fundingFees), positions[msg.sender].positionUnitsAmount, cviValue);
+        tokenAmount = positionBalance.sub(closePositionFee);
+
+        emit ClosePosition(msg.sender, tokenAmountBeforeFees, closePositionFee.add(realizedPendingFees).add(fundingFees), positions[msg.sender].positionUnitsAmount, cviValue);
 
         collectProfit(closePositionFee);
-        tokenAmount = positionBalance.sub(closePositionFee);
         
         if (_transferTokens) {
             token.safeTransfer(msg.sender, tokenAmount);
@@ -378,7 +392,7 @@ contract Platform is IPlatform, Ownable, ERC20 {
     }
 
     function collectProfit(uint256 amount) private {
-        if(address(feesCollector) != address(0)) {
+        if (address(feesCollector) != address(0)) {
             feesCollector.sendProfit(amount, token);
         }
     }
