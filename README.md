@@ -30,11 +30,11 @@ More information on CVI can be found [here](https://cviofficial.medium.com/cvix-
 
 ---
 
-## CVI platform contract addresses:
+## CVI platform addresses:
+
+### Contract addresses:
 
 GOVI Token: [0xeeaa40b28a2d1b0b08f6f97bb1dd4b75316c6107](https://etherscan.io/address/0xeeaa40b28a2d1b0b08f6f97bb1dd4b75316c6107)
-
-Deployer Address: [0xcedad8c0ae5e0a878c01cc8c81e0ca2dba909ded](https://etherscan.io/address/0xcedad8c0ae5e0a878c01cc8c81e0ca2dba909ded)
 
 USDT Platform: [0xe0437BeB5bb7Cf980e90983f6029033d710bd1da](https://etherscan.io/address/0xe0437BeB5bb7Cf980e90983f6029033d710bd1da)
 
@@ -51,6 +51,14 @@ GOVI Staking: [0xDb3130952eD9b5fa7108deDAAA921ae8f59beaCb](https://etherscan.io/
 Liquidation: [0xbB2a8986F1feB41C374658Bcd4A5E0B6b536Ba1a](https://etherscan.io/address/0xbB2a8986F1feB41C374658Bcd4A5E0B6b536Ba1a)
 
 COTI-ETH Staking Rewards: [0xe6e5220291CF78b6D93bd1d08D746ABbC115C64b](https://etherscan.io/address/0xe6e5220291CF78b6D93bd1d08D746ABbC115C64b)
+
+GOVI-ETH Staking Rewards: [0x936Dd3112a9D39Af39aDdA798503D9E7E7975Fb7](https://etherscan.io/address/0x936Dd3112a9D39Af39aDdA798503D9E7E7975Fb7)
+
+### Ethereum accounts:
+
+Deployer Address: [0xCedAD8C0Ae5e0a878c01cC8c81E0Ca2DbA909deD](https://etherscan.io/address/0xCedAD8C0Ae5e0a878c01cC8c81E0Ca2DbA909deD)
+
+Dev fund address: [0x773378dc0c9007181Ab5bDc61ac750fF69bFDA1F](https://etherscan.io/address/0x773378dc0c9007181Ab5bDc61ac750fF69bFDA1F)
 
 ---
 ## License
