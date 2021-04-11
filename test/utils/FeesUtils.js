@@ -44,5 +44,39 @@ const calculateNextTurbulence = (currTurbulence, periods) => {
     return nextTurbulence;
 };
 
+const calculateNextAverageTurbulence = (currTurbulence, timeDiff, heartbeat, rounds) => {
+    const hours = timeDiff.div(new BN(heartbeat)).toNumber();
+    let nextTurbulence = currTurbulence;
+
+    let decayTimes = 0;
+    let increaseTimes = 0;
+
+    if (hours >= rounds) {
+        decayTimes = rounds;
+    } else {
+        increaseTimes = rounds - hours;
+        decayTimes = rounds - increaseTimes;
+    }
+
+    for (let i = 0; i < decayTimes; i++) {
+        nextTurbulence = nextTurbulence.div(new BN(2));
+    }
+
+    for (let i = 0; i < increaseTimes; i++) {
+        nextTurbulence = nextTurbulence.add(new BN(100));
+    }
+
+    if (nextTurbulence.gt(new BN(1000))) {
+        nextTurbulence = new BN(1000);
+    }
+
+    if (nextTurbulence.lt(new BN(100))) {
+        nextTurbulence = new BN(0);
+    }
+
+    return nextTurbulence;
+};
+
 exports.calculateSingleUnitFee = calculateSingleUnitFee;
 exports.calculateNextTurbulence = calculateNextTurbulence;
+exports.calculateNextAverageTurbulence = calculateNextAverageTurbulence;

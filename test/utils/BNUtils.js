@@ -12,11 +12,15 @@ const toTokenAmount = amount => {
     return toBN(amount, DECIMALS);
 };
 
-const toCVI = (cviValue) => {
+const toUSDT = amount => {
+	return toBN(amount, 6);
+};
+
+const toCVI = cviValue => {
     return toBN(cviValue, CVI_DECIMALS);
-}
+};
 
 exports.toBN = toBN;
 exports.toTokenAmount = toTokenAmount;
 exports.toCVI = toCVI;
-
+exports.toUSDT = toUSDT;

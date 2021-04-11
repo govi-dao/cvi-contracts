@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity ^0.6.2;
 
-import "../interfaces/AggregatorV3Interface.sol";
+import "../v1/interfaces/AggregatorV3Interface.sol";
 
 contract FakePriceProvider is AggregatorV3Interface {
     uint256 public price;
@@ -47,11 +47,12 @@ contract FakePriceProvider is AggregatorV3Interface {
             uint80 roundIdAnswer,
             int256 answer,
             uint256,
-            uint256,
+            uint256 answerTimestamp,
             uint80
         )
     {
         answer = int(price);
         roundIdAnswer = roundId;
+        answerTimestamp = timestamps[roundId];
     }
 }

@@ -196,10 +196,6 @@ contract Platform is IPlatform, Ownable, ERC20 {
         uint256 tokenAmountToDeposit = _tokenAmount.sub(depositFee);
         uint256 supply = totalSupply();
         uint256 balance = totalBalance();
-
-        if (!_transferTokens) {
-            balance = balance.sub(_tokenAmount);
-        }
     
         if (supply > 0 && balance > 0) {
                 lpTokenAmount = tokenAmountToDeposit.mul(supply).div(balance);
@@ -267,14 +263,9 @@ contract Platform is IPlatform, Ownable, ERC20 {
         uint256 positionUnitsAmountWithoutPremium =  _tokenAmount.sub(openPositionFee).mul(MAX_CVI_VALUE).div(cviValue);
         uint256 minPositionUnitsAmount = positionUnitsAmountWithoutPremium.mul(MAX_FEE_PERCENTAGE.sub(feesCalculator.buyingPremiumFeeMaxPercent())).div(MAX_FEE_PERCENTAGE);
 
-        uint256 balance = token.balanceOf(address(this));
-        if (!_transferTokens) {
-            balance = balance.sub(_tokenAmount);
-        }
-
         uint256 collateralRatio = 0;
-        if (balance > 0) {
-            collateralRatio = (totalPositionUnitsAmount.add(minPositionUnitsAmount)).mul(PRECISION_DECIMALS).div(balance.add(_tokenAmount).sub(openPositionFee));
+        if (token.balanceOf(address(this)) > 0) {
+            collateralRatio = (totalPositionUnitsAmount.add(minPositionUnitsAmount)).mul(PRECISION_DECIMALS).div(token.balanceOf(address(this)).add(_tokenAmount).sub(openPositionFee));
         }
         uint256 buyingPremiumFee = feesCalculator.calculateBuyingPremiumFee(_tokenAmount, collateralRatio);
         

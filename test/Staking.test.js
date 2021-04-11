@@ -1,4 +1,4 @@
-const {expectRevert, time, BN, balance} = require('@openzeppelin/test-helpers');
+const {expectRevert, time, BN, balance, send} = require('@openzeppelin/test-helpers');
 const {accounts, contract, web3} = require('@openzeppelin/test-environment');
 const chai = require('chai');
 
@@ -8,6 +8,7 @@ const Staking = contract.fromArtifact('Staking');
 const FakeERC20 = contract.fromArtifact('FakeERC20');
 const FakeWETH = contract.fromArtifact('FakeWETH');
 const FakeExchange = contract.fromArtifact('FakeExchange');
+const ETHStakingProxy = contract.fromArtifact('ETHStakingProxy');
 
 const expect = chai.expect;
 const [admin, bob, alice, carol] = accounts;
@@ -16,6 +17,7 @@ const TO_WETH_RATE = toBN(1, 9);
 const PRECISION_DECIMALS = toBN(1, 18);
 
 const GAS_PRICE = toBN(1, 10);
+
 const sendProfitAndValidate = async (token, account, amount, recipient, isProfit) => {
     const beforeProfit = await this.staking.totalProfits(token.address);
     const stakes = await this.staking.totalStaked();
@@ -154,6 +156,7 @@ describe('Staking', () => {
         this.fakeExchange = await FakeExchange.new(this.wethToken.address, TO_WETH_RATE, {from: admin});
         this.wethToken.transfer(this.fakeExchange.address, toTokenAmount(1000000000), {from: admin});
         this.staking = await Staking.new(this.cviToken.address, this.fakeExchange.address, {from: admin});
+        this.stakingProxy = await ETHStakingProxy.new(this.wethToken.address, this.staking.address, {from: admin});
     });
 
     it('exposes correct precision decimals', async() => {
@@ -352,7 +355,7 @@ describe('Staking', () => {
         await time.increaseTo(stakeTimestamp.add(new BN(60 * 60)));
         await expectRevert(this.staking.unstake(toTokenAmount(500), {from: bob}), 'Funds locked');
 
-        await time.increaseTo(stakeTimestamp2.add(new BN(60 * 60 - 1)));
+        await time.increaseTo(stakeTimestamp2.add(new BN(60 * 60 - 2)));
         await expectRevert(this.staking.unstake(toTokenAmount(500), {from: bob}), 'Funds locked');
 
         await time.increaseTo(stakeTimestamp2.add(new BN(60 * 60)));
@@ -542,8 +545,6 @@ describe('Staking', () => {
         await testClaimProfit([this.daiToken, this.usdtToken, this.wethToken], amount => toBN(amount, 13));
     });
 
-    });
-
     it('reverts when no funds to convert', async() => {
         await this.staking.addToken(this.daiToken.address, {from: admin});
         await this.staking.addToken(this.usdtToken.address, {from: admin});
@@ -596,5 +597,29 @@ describe('Staking', () => {
 
         expect(await this.staking.profitOf(bob, this.wethToken.address, {from: bob})).to.be.bignumber.equal(bobProfit);
         expect(await this.staking.profitOf(alice, this.wethToken.address, {from: alice})).to.be.bignumber.equal(aliceProfit);
+    });
+
+    it('ETH proxy stakes properly receives profits', async() => {
+        const amount = toTokenAmount(1);
+        const proxyBalanceBefore = await balance.current(this.stakingProxy.address, 'wei');
+        await send.ether(admin, this.stakingProxy.address, amount);
+        const proxyBalanceAfter = await balance.current(this.stakingProxy.address, 'wei');
+        expect(proxyBalanceBefore.add(amount)).to.be.bignumber.equal(proxyBalanceAfter);
+    });
+
+    it('ETH proxy stakes properly converts and transfers profits to staking', async() => {
+        await this.cviToken.transfer(bob, toTokenAmount(1000), {from: admin});
+        await stakeAndValidate(bob, toTokenAmount(1000));
+
+        await this.staking.addClaimableToken(this.wethToken.address, {from: admin});
+
+        const amount = toTokenAmount(10);
+        await send.ether(admin, this.stakingProxy.address, amount);
+
+        const stakingBalanceBefore = await this.wethToken.balanceOf(this.staking.address);
+        await this.stakingProxy.convertETHFunds({from: admin});
+
+        const stakingBalanceAfter = await this.wethToken.balanceOf(this.staking.address);
+        expect(stakingBalanceBefore.add(amount)).to.be.bignumber.equal(stakingBalanceAfter);
     });
 });
