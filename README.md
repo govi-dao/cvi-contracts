@@ -32,9 +32,21 @@ More information on CVI can be found [here](https://cviofficial.medium.com/cvix-
 
 ## CVI platform addresses:
 
-### Contract addresses:
+### ETH Platform Contract addresses:
 
-GOVI Token: [0xeeaa40b28a2d1b0b08f6f97bb1dd4b75316c6107](https://etherscan.io/address/0xeeaa40b28a2d1b0b08f6f97bb1dd4b75316c6107)
+ETH Platform: [0x5005e8Dc0033E78AF80cfc8d10f5163f2FcF0E79](https://etherscan.io/address/0x5005e8Dc0033E78AF80cfc8d10f5163f2FcF0E79)
+
+ETH LP Staking: [0x40d203332b0A262F1a371ae9dA1788fe6825A6F6](https://etherscan.io/address/0x40d203332b0A262F1a371ae9dA1788fe6825A6F6)
+
+FeesCalculator: [0x05bA528F40FeB3347f14AF3Bb6D97Bf4826cd94f](https://etherscan.io/address/0x05bA528F40FeB3347f14AF3Bb6D97Bf4826cd94f)
+
+Position Rewards: [0xd5c0A6094f005D75b6E99a3DA8d0B80127027C99](https://etherscan.io/address/0xd5c0A6094f005D75b6E99a3DA8d0B80127027C99)
+
+Liquidation: [0x8d55c22ea6610e3fa4659d3d5f4d751ca1e62573](https://etherscan.io/address/0x8d55c22ea6610e3fa4659d3d5f4d751ca1e62573)
+
+Staking Proxy: [0x287839632973f7754C04a9E23d393Aa09fa5b6De](https://etherscan.io/address/0x287839632973f7754C04a9E23d393Aa09fa5b6De)
+
+### USDT Platform Contract addresses:
 
 USDT Platform: [0xe0437BeB5bb7Cf980e90983f6029033d710bd1da](https://etherscan.io/address/0xe0437BeB5bb7Cf980e90983f6029033d710bd1da)
 
@@ -54,9 +66,15 @@ COTI-ETH Staking Rewards: [0xe6e5220291CF78b6D93bd1d08D746ABbC115C64b](https://e
 
 GOVI-ETH Staking Rewards: [0x936Dd3112a9D39Af39aDdA798503D9E7E7975Fb7](https://etherscan.io/address/0x936Dd3112a9D39Af39aDdA798503D9E7E7975Fb7)
 
+### Governance Token
+
+GOVI Token: [0xeeaa40b28a2d1b0b08f6f97bb1dd4b75316c6107](https://etherscan.io/address/0xeeaa40b28a2d1b0b08f6f97bb1dd4b75316c6107)
+
 ### Ethereum accounts:
 
 Deployer Address: [0xCedAD8C0Ae5e0a878c01cC8c81E0Ca2DbA909deD](https://etherscan.io/address/0xCedAD8C0Ae5e0a878c01cC8c81E0Ca2DbA909deD)
+
+Liquidity mining conduit address: [0x93337CCE0F3f2E3236772859609D1BDcAEb8F5A9](https://etherscan.io/address/0x93337CCE0F3f2E3236772859609D1BDcAEb8F5A9)
 
 Dev fund address: [0x773378dc0c9007181Ab5bDc61ac750fF69bFDA1F](https://etherscan.io/address/0x773378dc0c9007181Ab5bDc61ac750fF69bFDA1F)
 
