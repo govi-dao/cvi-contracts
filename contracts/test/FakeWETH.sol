@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0
-pragma solidity 0.6.12;
+pragma solidity 0.7.6;
 
 import "./FakeERC20.sol";
 import "../v1/interfaces/IWETH.sol";
 
 contract FakeWETH is FakeERC20, IWETH {
-    constructor(string memory name, string memory symbol, uint256 supply, uint8 decimals) public FakeERC20(name, symbol, supply, decimals) {
+    constructor(string memory name, string memory symbol, uint256 supply, uint8 decimals) FakeERC20(name, symbol, supply, decimals) {
     }
 
     function deposit() external payable override {

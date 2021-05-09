@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0
-pragma solidity ^0.6.12;
+pragma solidity 0.7.6;
 
 import "@openzeppelin/contracts/math/Math.sol";
 import "@openzeppelin/contracts/math/SafeMath.sol";
@@ -20,7 +20,7 @@ contract Owned {
     address public owner;
     address public nominatedOwner;
 
-    constructor(address _owner) public {
+    constructor(address _owner) {
         require(_owner != address(0), "Owner address cannot be 0");
         owner = _owner;
         emit OwnerChanged(address(0), _owner);
@@ -80,7 +80,7 @@ contract Pausable is Owned {
 
         // If applicable, set the last pause time.
         if (paused) {
-            lastPauseTime = now;
+            lastPauseTime = block.timestamp;
         }
 
         // Let everyone know that our pause state has changed.

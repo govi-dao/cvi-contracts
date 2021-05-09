@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0
-pragma solidity 0.6.12;
+pragma solidity 0.7.6;
 pragma experimental ABIEncoderV2;
 
 import "@openzeppelin/contracts/math/SafeMath.sol";
@@ -43,7 +43,7 @@ contract Staking is IStaking, IFeesCollector, Ownable {
 
 	uint256 public creationTimestamp;
 
-    constructor(IERC20 _cviToken, IUniswapV2Router02 _uniswapRouter) public {
+    constructor(IERC20 _cviToken, IUniswapV2Router02 _uniswapRouter) {
     	cviToken = _cviToken;
     	uniswapRouter = _uniswapRouter;
     	wethToken = IWETH(_uniswapRouter.WETH());

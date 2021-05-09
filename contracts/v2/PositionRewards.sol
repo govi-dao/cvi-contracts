@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0
-pragma solidity 0.6.12;
+pragma solidity 0.7.6;
 pragma experimental ABIEncoderV2;
 
 import "@openzeppelin/contracts/math/SafeMath.sol";
@@ -42,7 +42,7 @@ contract PositionRewards is IPositionRewards, Ownable {
 
     Platform public platform;
 
-    constructor(IERC20 _cviToken) public {
+    constructor(IERC20 _cviToken) {
         cviToken = _cviToken;
     }
 

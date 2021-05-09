@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0
-pragma solidity 0.6.12;
+pragma solidity 0.7.6;
 pragma experimental ABIEncoderV2;
 
 import "@openzeppelin/contracts/math/SafeMath.sol";
@@ -16,7 +16,7 @@ contract CVIOracleV3 is ICVIOracleV3 {
 
     AggregatorV3Interface public immutable cviAggregator;
 
-    constructor(AggregatorV3Interface _cviAggregator) public {
+    constructor(AggregatorV3Interface _cviAggregator) {
     	cviAggregator = _cviAggregator;
     }
 

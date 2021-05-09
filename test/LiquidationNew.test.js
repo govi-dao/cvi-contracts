@@ -14,7 +14,7 @@ const FeesCalculator = contract.fromArtifact('FeesCalculatorV3');
 const FakeERC20 = contract.fromArtifact('FakeERC20');
 const FakePriceProvider = contract.fromArtifact('FakePriceProvider');
 const fakeFeesCollector = contract.fromArtifact('FakeFeesCollector');
-const Liquidation = contract.fromArtifact('Liquidation');
+const Liquidation = contract.fromArtifact('LiquidationV2');
 
 const expect = chai.expect;
 const [admin, bob, alice, carol] = accounts;
@@ -378,18 +378,20 @@ const calculateContractPositionBalance = async account => {
     return result;
 };
 
-const calculateDaysBeforeLiquidation = async account => {
+const calculateDaysBeforeLiquidation = async (account, openCVIValue) => {
     const result = await calculateContractPositionBalance(account);
 
     const { 0: currentPositionBalanceOne, 1: isPositiveOne, 2: positionUnitsAmount, 3: leverageOne, 4: fundingFeesOne, 5: marginDebtOne} = result;
+
+    const openPositionAmount = positionUnitsAmount.mul(new BN(openCVIValue)).div(leverageOne).div(MAX_CVI_VALUE);
 
     let daysBeforeLiquidation = new BN(0);
     let liquidationThreshold = new BN(0);
     if (isPositiveOne) {
         let singlePositionUnitDailyFee = new BN(await this.feesCalculator.calculateSingleUnitFundingFee([{period: 86400, cviValue: 5000}]));
         let dailyFundingFee = (new BN(positionUnitsAmount)).mul(singlePositionUnitDailyFee).div(toBN(1,10));
-        liquidationThreshold = (new BN(positionUnitsAmount)).mul(new BN(LIQUIDATION_MIN_THRESHOLD)).div(new BN(LIQUIDATION_MAX_FEE_PERCENTAGE));
-        daysBeforeLiquidation = (new BN(currentPositionBalanceOne)).sub(new BN(liquidationThreshold)).div(new BN(dailyFundingFee));
+        liquidationThreshold = (new BN(openPositionAmount)).mul(new BN(LIQUIDATION_MIN_THRESHOLD)).div(new BN(LIQUIDATION_MAX_FEE_PERCENTAGE));
+        daysBeforeLiquidation = (new BN(currentPositionBalanceOne)).sub(new BN(liquidationThreshold)).div(new BN(dailyFundingFee)).add(new BN(1));
 
         print('singlePositionUnitDailyFee = ', singlePositionUnitDailyFee.toString(), ' dailyFundingFee = ', dailyFundingFee.toString(),
                 ' liquidationThreshold = ', liquidationThreshold.toString(), ' daysBeforeLiquidation = ', daysBeforeLiquidation.toString());
@@ -409,26 +411,24 @@ const getTotals = async () => {
     return [totalPositionUnitsAmount, totalFundingFeesAmount, totalLeveragedTokensAmount];
 };
 
-const getLiquidationReward = async (positionBalance, isPositive, positionUnitsAmount) => {
-    let finderFeeAmount = toBN(0);
-
-    let isToBeLiquidated = await this.liquidation.isLiquidationCandidate(positionBalance, isPositive, positionUnitsAmount, {from: admin});
+const getLiquidationReward = async (positionBalance, isPositive, positionUnitsAmount, openCVIValue = 5000) => {
+    let isToBeLiquidated = await this.liquidation.isLiquidationCandidate(positionBalance, isPositive, positionUnitsAmount, 5000, 1, {from: admin});
     if (!isToBeLiquidated) {
-        return finderFeeAmount;
+        return toBN(0);
     }
 
-    if (!isPositive || toBN(positionBalance) < positionUnitsAmount.mul(LIQUIDATION_MIN_REWARD_AMOUNT).div(LIQUIDATION_MAX_FEE_PERCENTAGE)) {
-        finderFeeAmount = toBN(positionUnitsAmount.mul(LIQUIDATION_MIN_REWARD_AMOUNT).div(LIQUIDATION_MAX_FEE_PERCENTAGE));
+    const balance = positionUnitsAmount.mul(new BN(openCVIValue)).div(MAX_CVI_VALUE);
+
+    if (!isPositive || toBN(positionBalance) < balance.mul(LIQUIDATION_MIN_REWARD_AMOUNT).div(LIQUIDATION_MAX_FEE_PERCENTAGE)) {
+        return toBN(balance.mul(LIQUIDATION_MIN_REWARD_AMOUNT).div(LIQUIDATION_MAX_FEE_PERCENTAGE));
     }
 
-    if (isPositive && toBN(positionBalance).gte( toBN(positionUnitsAmount).mul(LIQUIDATION_MIN_REWARD_AMOUNT).div(LIQUIDATION_MAX_FEE_PERCENTAGE) )
-        && toBN(positionBalance).lte( toBN(positionUnitsAmount).mul(LIQUIDATION_MAX_REWARD_AMOUNT).div(LIQUIDATION_MAX_FEE_PERCENTAGE)) ) {
-            finderFeeAmount = toBN(positionBalance);
-    } else {
-        finderFeeAmount = positionUnitsAmount.mul(LIQUIDATION_MAX_REWARD_AMOUNT).div(LIQUIDATION_MAX_FEE_PERCENTAGE);
+    if (isPositive && toBN(positionBalance).gte(balance.mul(LIQUIDATION_MIN_REWARD_AMOUNT).div(LIQUIDATION_MAX_FEE_PERCENTAGE) )
+        && toBN(positionBalance).lte( toBN(balance).mul(LIQUIDATION_MAX_REWARD_AMOUNT).div(LIQUIDATION_MAX_FEE_PERCENTAGE)) ) {
+            return toBN(positionBalance);
     }
 
-    return finderFeeAmount;
+    return balance.mul(LIQUIDATION_MAX_REWARD_AMOUNT).div(LIQUIDATION_MAX_FEE_PERCENTAGE);
 };
 
 const liquidateAndValidate = async account => {
@@ -436,7 +436,7 @@ const liquidateAndValidate = async account => {
 
     const { currentPositionBalance, isPositive, positionUnitsAmount, leverage, fundingFees, marginDebt} = await calculateContractPositionBalance(account);
 
-    const isToBeLiquidated = await this.liquidation.isLiquidationCandidate(currentPositionBalance, isPositive, positionUnitsAmount, {from: admin});
+    const isToBeLiquidated = await this.liquidation.isLiquidationCandidate(currentPositionBalance, isPositive, positionUnitsAmount, 5000, 1, {from: admin});
 
     if (isToBeLiquidated) {
         const tx = await this.wethPlatform.liquidatePositions([alice], {from: admin});
@@ -456,7 +456,7 @@ const liquidateAndValidate = async account => {
         this.state.positions[account] = expectedPosition;
 
         expectedFinderFeeAmount = toBN(await getLiquidationReward(currentPositionBalance, isPositive, positionUnitsAmount));
-        const finderFeeAmount = await this.liquidation.getLiquidationReward(currentPositionBalance, isPositive, positionUnitsAmount, {from: admin});
+        const finderFeeAmount = await this.liquidation.getLiquidationReward(currentPositionBalance, isPositive, positionUnitsAmount, 5000, 1, {from: admin});
         expect(expectedFinderFeeAmount).to.be.bignumber.equal(finderFeeAmount);
 
         // TODO: verify reporter received reward
@@ -511,40 +511,7 @@ const beforeEachPlatform = async isETH => {
 };
 
 const setPlatformTests = isETH => {
-    it('isLiquidationCandidate and getLiquidationReward related checks', async () => {
-        let positionBalance = new BN(90);
-        let isPositive = true;
-        let positionUnitsAmount = new BN(2000);
-        let result = (new BN(positionUnitsAmount)).mul(new BN(LIQUIDATION_MAX_REWARD_AMOUNT)).div(new BN(LIQUIDATION_MAX_FEE_PERCENTAGE));
-
-        expect(await this.liquidation.isLiquidationCandidate(positionBalance, isPositive, positionUnitsAmount, {from: admin})).to.be.true;
-        expect(await this.liquidation.getLiquidationReward(positionBalance, isPositive, positionUnitsAmount, {from: admin})).to.be.bignumber.equal(result);
-
-        positionBalance = new BN(90);
-        isPositive = false;
-        positionUnitsAmount = new BN(2000);
-        result = (new BN(positionUnitsAmount)).mul(new BN(LIQUIDATION_MIN_REWARD_AMOUNT)).div(new BN(LIQUIDATION_MAX_FEE_PERCENTAGE));
-
-        expect(await this.liquidation.isLiquidationCandidate(positionBalance, isPositive, positionUnitsAmount, {from: admin})).to.be.true;
-        expect(await this.liquidation.getLiquidationReward(positionBalance, isPositive, positionUnitsAmount, {from: admin})).to.be.bignumber.equal(result);
-
-        positionBalance = new BN(9);
-        isPositive = true;
-        positionUnitsAmount = new BN(2000);
-        result = (new BN(positionUnitsAmount)).mul(new BN(LIQUIDATION_MIN_REWARD_AMOUNT)).div(new BN(LIQUIDATION_MAX_FEE_PERCENTAGE));
-
-        expect(await this.liquidation.isLiquidationCandidate(positionBalance, isPositive, positionUnitsAmount, {from: admin})).to.be.true;
-        expect(await this.liquidation.getLiquidationReward(positionBalance, isPositive, positionUnitsAmount, {from: admin})).to.be.bignumber.equal(result);
-
-        positionBalance = new BN(200);
-        isPositive = true;
-        positionUnitsAmount = new BN(2000);
-
-        expect(await this.liquidation.isLiquidationCandidate(positionBalance, isPositive, positionUnitsAmount, {from: admin})).to.be.false;
-        expect(await this.liquidation.getLiquidationReward(positionBalance, isPositive, positionUnitsAmount, {from: admin})).to.be.bignumber.equal(new BN(0));
-    });
-
-    it('opens a position calculate time until until liquidation', async () => {
+    it('opens a position calculate time until liquidation', async () => {
         let cviValue = toCVI(5000);
 
         await this.fakePriceProvider.setPrice(cviValue);
@@ -560,9 +527,11 @@ const setPlatformTests = isETH => {
 
         const resultAliceTwo = await this.wethPlatform.calculatePositionBalance(alice);
         const { 0: currentPositionBalanceTwo, 1: isPositiveTwo, 2: positionUnitsAmountTwo} = resultAliceTwo;
-        expect(await this.liquidation.isLiquidationCandidate(currentPositionBalanceTwo, isPositiveTwo, positionUnitsAmountTwo, {from: admin})).to.be.false;
+        expect(await this.liquidation.isLiquidationCandidate(currentPositionBalanceTwo, isPositiveTwo, positionUnitsAmountTwo, 5000, 1, {from: admin})).to.be.false;
 
-        await time.increase(86400 * 1);
+        const { daysBeforeLiquidation } = await calculateDaysBeforeLiquidation(alice, new BN(5000));
+
+        await time.increase(SECONDS_PER_DAY.mul(daysBeforeLiquidation));
         cviValue = toCVI(5000);
         await this.fakePriceProvider.setPrice(cviValue);
         const timestamp = await updateSnapshots();
@@ -570,10 +539,10 @@ const setPlatformTests = isETH => {
         const resultAliceThree = await this.wethPlatform.calculatePositionBalance(alice);
         const { 0: currentPositionBalanceThree, 1: isPositiveThree, 2: positionUnitsAmountThree} = resultAliceThree;
 
-        expect(await this.liquidation.isLiquidationCandidate(currentPositionBalanceThree, isPositiveThree, positionUnitsAmountThree, {from: admin})).to.be.true;
+        expect(await this.liquidation.isLiquidationCandidate(currentPositionBalanceThree, isPositiveThree, positionUnitsAmountThree, 5000, 1, {from: admin})).to.be.true;
     });
 
-    it('Calculate time until until liquidation, higher for more leveraged positions', async () => {
+    it('Calculate time until liquidation, higher for more leveraged positions', async () => {
         let cviValue = toCVI(5000);
         await this.fakePriceProvider.setPrice(cviValue);
 
@@ -584,9 +553,9 @@ const setPlatformTests = isETH => {
         let txBob = await openPosition(250, 5000, bob, 10000, 4);
         let txCarol = await openPosition(500, 5000, carol, 10000, 2);
 
-        const {daysBeforeLiquidationAlice, liquidationThresholdAlice} = await calculateDaysBeforeLiquidation(alice);
-        const {daysBeforeLiquidationBob, liquidationThresholdBob} = await calculateDaysBeforeLiquidation(bob);
-        const {daysBeforeLiquidationCarol, liquidationThresholdCarol} = await calculateDaysBeforeLiquidation(carol);
+        const {daysBeforeLiquidation: daysBeforeLiquidationAlice} = await calculateDaysBeforeLiquidation(alice);
+        const {daysBeforeLiquidation: daysBeforeLiquidationBob} = await calculateDaysBeforeLiquidation(bob);
+        const {daysBeforeLiquidation: daysBeforeLiquidationCarol} = await calculateDaysBeforeLiquidation(carol);
 
         expect(daysBeforeLiquidationBob).to.be.bignumber.lte(daysBeforeLiquidationAlice);
         expect(daysBeforeLiquidationCarol).to.be.bignumber.lte(daysBeforeLiquidationAlice);
@@ -601,11 +570,12 @@ const setPlatformTests = isETH => {
 
         let {positionUnits: positionUnitsAlice} = await openPositionAndValidate(1000, alice);
 
-        await time.increase(86400 * 9);
+        const { daysBeforeLiquidation } = await calculateDaysBeforeLiquidation(alice, new BN(5000));
+        await time.increase(SECONDS_PER_DAY.mul(daysBeforeLiquidation));
         await updateSnapshots();
 
         let { 0: currentPositionBalanceOne, 1: isPositiveOne, 2: positionUnitsAmount, 3: leverageOne, 4: fundingFeesOne, 5: marginDebtOne} = await calculateContractPositionBalance(alice);
-        expect(await this.liquidation.isLiquidationCandidate(currentPositionBalanceOne, isPositiveOne, positionUnitsAmount, {from: admin})).to.be.true;
+        expect(await this.liquidation.isLiquidationCandidate(currentPositionBalanceOne, isPositiveOne, positionUnitsAmount, 5000, 1, {from: admin})).to.be.true;
         let finderFeeAmountResult = await liquidateAndValidate(alice);
         expect(finderFeeAmountResult).to.be.bignumber.gt(toBN(0));
     });
@@ -668,7 +638,7 @@ const setPlatformTests = isETH => {
         expect(currentPositionBalanceOne).to.be.bignumber.equal(new BN(tokenAmount1 * (1 - factor1 * OPEN_FEE_PERC / MAX_FEE)));
         expect(totalPositionUnitsAmount2).to.be.bignumber.equal(totalPositionUnitsAmount + positionUnitsAmount);
         expect(totalFundingFeesAmount2).to.be.bignumber.equal(totalFundingFeesAmount + fundingFeesOne);
-        expect(new BN(totalLeveragedTokensAmount2 - totalLeveragedTokensAmount)).to.be.bignumber.equal(new BN(tokenAmount1 * factor1 * (1 - OPEN_FEE_PERC / MAX_FEE)));
+        expect(new BN(totalLeveragedTokensAmount2.sub(totalLeveragedTokensAmount))).to.be.bignumber.equal(new BN(tokenAmount1 * (1 - factor1 * OPEN_FEE_PERC / MAX_FEE) * factor1));
 
         let numDays = 4;
         await time.increase(86400 * numDays );
@@ -824,15 +794,17 @@ const setPlatformTests = isETH => {
         const resultAliceOne = await this.wethPlatform.calculatePositionBalance(alice);
         const { 0: currentPositionBalanceOne, 1: isPositiveOne, 2: positionUnitsOne} = resultAliceOne;
 
-        expect(await this.liquidation.isLiquidationCandidate(currentPositionBalanceOne, isPositiveOne, positionUnitsOne, {from: admin})).to.be.false;
+        expect(await this.liquidation.isLiquidationCandidate(currentPositionBalanceOne, isPositiveOne, positionUnitsOne, 5000, 1, {from: admin})).to.be.false;
 
-        await time.increase(86400*8);
+        const {daysBeforeLiquidation} = await calculateDaysBeforeLiquidation(alice);
+
+        await time.increase(SECONDS_PER_DAY.mul(daysBeforeLiquidation));
         await updateSnapshots();
 
         const resultAliceTwo = await this.wethPlatform.calculatePositionBalance(alice);
         const { currentPositionBalance: currentPositionBalanceTwo, 1: isPositiveTwo, 2: positionUnitsTwo} = resultAliceTwo;
 
-        expect(await this.liquidation.isLiquidationCandidate(currentPositionBalanceTwo, isPositiveTwo, positionUnitsTwo, {from: admin})).to.be.true;
+        expect(await this.liquidation.isLiquidationCandidate(currentPositionBalanceTwo, isPositiveTwo, positionUnitsTwo, 5000, 1, {from: admin})).to.be.true;
         let tx2 = await this.wethPlatform.getLiquidableAddresses([alice, bob], {from: admin});
         // console.log('tx2 = ', tx2.toString());
 
@@ -879,15 +851,17 @@ const setPlatformTests = isETH => {
         const resultAliceOne = await this.wethPlatform.calculatePositionBalance(alice);
         const { 0: currentPositionBalanceOne, 1: isPositiveOne, 2: positionUnitsOne} = resultAliceOne;
 
-        expect(await this.liquidation.isLiquidationCandidate(currentPositionBalanceOne, isPositiveOne, positionUnitsOne, {from: admin})).to.be.false;
+        expect(await this.liquidation.isLiquidationCandidate(currentPositionBalanceOne, isPositiveOne, positionUnitsOne, 5000, 1, {from: admin})).to.be.false;
 
-        await time.increase(86400*8);
+        const {daysBeforeLiquidation} = await calculateDaysBeforeLiquidation(alice);
+
+        await time.increase(SECONDS_PER_DAY.mul(daysBeforeLiquidation));
         await updateSnapshots();
 
         const resultAliceTwo = await this.wethPlatform.calculatePositionBalance(alice);
         const { 0: currentPositionBalanceTwo, 1: isPositiveTwo, 2: positionUnitsTwo} = resultAliceTwo;
 
-        expect(await this.liquidation.isLiquidationCandidate(currentPositionBalanceTwo, isPositiveTwo, positionUnitsTwo, {from: admin})).to.be.true;
+        expect(await this.liquidation.isLiquidationCandidate(currentPositionBalanceTwo, isPositiveTwo, positionUnitsTwo, 5000, 1, {from: admin})).to.be.true;
         let tx2 = await this.wethPlatform.getLiquidableAddresses([alice, bob], {from: admin});
         // console.log('tx2 = ', tx2.toString());
 
@@ -924,7 +898,7 @@ const setPlatformTests = isETH => {
         const {daysBeforeLiquidation} = await calculateDaysBeforeLiquidation(alice);
         await liquidateAndValidate(alice);
 
-        await time.increase(daysBeforeLiquidation);
+        await time.increase(86400 * daysBeforeLiquidation);
 
         await this.wethPlatform.getLiquidableAddresses([alice, bob], {from: admin});
         await this.wethPlatform.closePosition(250, 5000, {from: alice});

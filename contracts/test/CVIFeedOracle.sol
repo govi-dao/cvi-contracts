@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.6.2;
+pragma solidity 0.7.6;
 
 import "../v1/interfaces/AggregatorV2V3Interface.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
@@ -23,7 +23,7 @@ contract CVIFeedOracle is AggregatorV2V3Interface, Ownable {
   constructor(
     uint8 _decimals,
     int256 _initialAnswer
-  ) public {
+  ) {
     decimals = _decimals;
     updateAnswer(_initialAnswer);
   }

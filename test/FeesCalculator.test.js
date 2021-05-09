@@ -15,6 +15,11 @@ const MAX_PREMIUM_FEE = new BN(1000);
 
 const SECONDS_PER_HOUR = 60 * 60;
 
+//TODO: Test period zero in various scenarios in updateSnapshots
+//TOOD: test setOracleHeartbeatPeriod, setBuyingPremiumFeeMax, setBuyingPremiumThreshold, setTurbulenceStep
+//TODO: Test close fee decay new method
+//TODO: Test exponent overflow in single slot calculation
+
 const PREMIUM_FEE_TEST_RATIOS = [0.799, 0.8, 0.8, 0.94, 0.95, 0.99, 1.0, 1.01];
 const PREMIUM_FEE_TEST_UNITS = [1, 1000, 2000];
 

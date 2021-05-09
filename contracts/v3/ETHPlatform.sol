@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0
-pragma solidity 0.6.12;
+pragma solidity 0.7.6;
 pragma experimental ABIEncoderV2;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -9,10 +9,12 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 contract ETHPlatform is PlatformV2, IETHPlatform {
 
+    using SafeMath for uint256;
+
     constructor(string memory _lpTokenName, string memory _lpTokenSymbolName, uint256 _initialTokenToLPTokenRate,
         IFeesCalculatorV3 _feesCalculator,
         ICVIOracleV3 _cviOracle,
-        ILiquidationV2 _liquidation) public PlatformV2(IERC20(address(0)), _lpTokenName, _lpTokenSymbolName, _initialTokenToLPTokenRate, _feesCalculator, _cviOracle, _liquidation) {
+        ILiquidationV2 _liquidation) PlatformV2(IERC20(address(0)), _lpTokenName, _lpTokenSymbolName, _initialTokenToLPTokenRate, _feesCalculator, _cviOracle, _liquidation) {
     }
 
     function depositETH(uint256 _minLPTokenAmount) external override payable nonReentrant returns (uint256 lpTokenAmount) {

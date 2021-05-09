@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0
-pragma solidity ^0.6.2;
+pragma solidity 0.7.6;
 
 import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
 
@@ -11,7 +11,7 @@ contract FakeExchange {
     IERC20 public token;
     IERC20 public immutable wethToken;
 
-    constructor(IERC20 _wethToken, uint _exchangeRate) public {
+    constructor(IERC20 _wethToken, uint _exchangeRate) {
         wethToken = _wethToken;
         exchangeRate = _exchangeRate;
     }

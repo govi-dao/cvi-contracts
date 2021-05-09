@@ -22,6 +22,7 @@ const PRECISION_DECIMALS = toBN(1, 10);
 const INITIAL_RATE = toBN(1, 12);
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 const HEART_BEAT_SECONDS = 55 * 60;
+//TODO: Test turbulence can be turend off with 0 period
 
 let firstSnapshot;
 let latestSnapshotUpdateTime;
@@ -72,7 +73,7 @@ const increaseTurbulence = async increases => {
     await validateTurbulence(roundPeriods, 0);
 };
 
-let firstSnapshot;
+//TODO: Test period zero in various scenarios in updateSnapshots
 
 const getLatestSnapshot = async () => {
     const snapshot = await this.platform.cviSnapshots(latestSnapshotUpdateTime);
@@ -130,6 +131,7 @@ const setSnapshotTests = () => {
         expect(await getLatestSnapshot()).to.be.bignumber.equal(PRECISION_DECIMALS.add(singleUnitFee));
     });
 
+    //TODO: Sometimes passes and sometimes not, fix
     it('calculates correct snapshot between oracle time and timestamp is identical to latest oracle round', async () => {
         await this.fakePriceProvider.setPrice(toCVI(5000));
         await updateSnapshots();
@@ -266,8 +268,14 @@ const setSnapshotTests = () => {
     });
 
     it.skip('reverts when oracle round id is smaller than latest round id', async () => {
-        await expectRevert(feeModel.updateSnapshots(), 'Bad round id');
+        //const feeModel = await FeesModelV2.new(10, 1, 0, ZERO_ADDRESS, this.feesCalculator.address, this.fakeOracle.address, {from: admin});
+        //TODO: Test!
+        //await expectRevert(feeModel.updateSnapshots(), 'Bad round id');
     });
+
+    //TODO: Test setters
+
+    //TODO: Test addendum
 
     it.skip('calculateFundingFeesAddendum related tests', async () =>{
         await time.increase(3600);

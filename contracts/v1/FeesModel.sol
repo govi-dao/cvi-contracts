@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0
-pragma solidity 0.6.12;
+pragma solidity 0.7.6;
 pragma experimental ABIEncoderV2;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
@@ -30,7 +30,7 @@ contract FeesModel is IFeesModel, Ownable {
     
     mapping(uint256 => uint256) private cviSnapshots;
 
-    constructor(IFeesCalculator _feesCalculator, ICVIOracle _cviOracle) public {
+    constructor(IFeesCalculator _feesCalculator, ICVIOracle _cviOracle) {
         feesCalculator = _feesCalculator;
         cviOracle = _cviOracle;
     }

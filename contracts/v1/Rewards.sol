@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0
-pragma solidity 0.6.12;
+pragma solidity 0.7.6;
 pragma experimental ABIEncoderV2;
 
 import "@openzeppelin/contracts/math/SafeMath.sol";
@@ -22,7 +22,7 @@ contract Rewards is IRewards, Ownable {
     uint256 private dailyReward = 165_000e18;
     address public rewarder;
 
-    constructor(IERC20 _cviToken) public {
+    constructor(IERC20 _cviToken) {
         cviToken = _cviToken;
     }
 

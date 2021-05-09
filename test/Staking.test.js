@@ -18,6 +18,8 @@ const PRECISION_DECIMALS = toBN(1, 18);
 
 const GAS_PRICE = toBN(1, 10);
 
+//TODO: Fix and make sure you can't add same token as calimable and other token
+
 const sendProfitAndValidate = async (token, account, amount, recipient, isProfit) => {
     const beforeProfit = await this.staking.totalProfits(token.address);
     const stakes = await this.staking.totalStaked();
@@ -335,7 +337,7 @@ describe('Staking', () => {
 
         await expectRevert(this.staking.unstake(toTokenAmount(500), {from: bob}), 'Funds locked');
 
-        await time.increaseTo(stakeTimestamp.add(new BN(60 * 60 - 1)));
+        await time.increaseTo(stakeTimestamp.add(new BN(60 * 60 - 2)));
 
         await expectRevert(this.staking.unstake(toTokenAmount(500), {from: bob}), 'Funds locked');
 
@@ -543,6 +545,10 @@ describe('Staking', () => {
     it('claims all profits including eth for weth token properly', async() => {
         await this.wethToken.deposit({from: admin, value: web3.utils.toWei('10')});
         await testClaimProfit([this.daiToken, this.usdtToken, this.wethToken], amount => toBN(amount, 13));
+    });
+
+    it('claims correct profit for each token', async() => {
+        //TODO: Make test accepts values for each token and calculate profits properly to test this
     });
 
     it('reverts when no funds to convert', async() => {

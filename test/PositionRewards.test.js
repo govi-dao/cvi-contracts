@@ -1,7 +1,7 @@
 const {expectRevert, time, BN} = require('@openzeppelin/test-helpers');
 const {accounts, contract} = require('@openzeppelin/test-environment');
+const { print } = require('./utils/DebugUtils');
 const chai = require('chai');
-
 const {toTokenAmount, toUSDT, toBN, toCVI} = require('./utils/BNUtils.js');
 
 const Platform = contract.fromArtifact('Platform');
@@ -14,6 +14,7 @@ const FakePriceProvider = contract.fromArtifact('FakePriceProvider');
 const FakeFeesCollector = contract.fromArtifact('FakeFeesCollector');
 const FakePlatform = contract.fromArtifact('FakePlatform');
 const PositionRewards = contract.fromArtifact('PositionRewards');
+const PositionRewardsHelper = contract.fromArtifact('PositionRewardsHelper');
 
 const expect = chai.expect;
 const [admin, bob, alice, carol, dave] = accounts;
@@ -31,6 +32,8 @@ const MAX_REWARD_TIME = new BN(SECONDS_PER_DAY * 3);
 const MAX_LINEAR_POSITION_UNITS = toBN(30000, 6); //TODO: Put in beforeEach
 const MAX_LINEAR_GOVI = toBN(100, 18); //TODO: Put in beforeEach
 const MAX_TIME_PERCENTAGE_GAIN = toBN(25, 8);
+
+//TODO: Test setCalculationParameters divides by reward factor!
 
 const calculateReward = (positionUnits, timePassed, maxLinearPositionUnits, maxLinearGoi, maxSingleReward, maxRewardTime, maxTimePercentageGain) => {
     const x0 = maxLinearPositionUnits === undefined ? MAX_LINEAR_POSITION_UNITS : maxLinearPositionUnits;
@@ -133,6 +136,7 @@ describe('PositionRewards', () => {
         this.fakeFeesCollector = await FakeFeesCollector.new(this.token.address, {from: admin});
         this.rewards = await PositionRewards.new(this.cviToken.address, {from: admin});
         this.liquidation = await Liquidation.new({from: admin});
+        this.positionRewardsHelper = await PositionRewardsHelper.new(this.rewards.address, {from: admin});
 
         this.platform = await Platform.new(
             this.token.address, 'WETH-LP', 'WETH-LP', INITIAL_RATE, this.feeModel.address,
@@ -330,7 +334,7 @@ describe('PositionRewards', () => {
         const amounts = [10, 100, 500, 1000, 5000, 10000, 20000, 25000, 30000, 40000, 50000, 100000, 500000, 1000000];
         const MAX_REWARD_PERC = 10;
         for(const amount of amounts) {
-            // console.log(`Opening a position of size:${amount} USDT`);
+            print(`Opening a position of size:${amount} USDT`);
             const {positionUnits, positionTimestamp} = await openPosition(toUSDT(amount), bob);
 
             await time.increase(SECONDS_PER_DAY);
@@ -341,7 +345,7 @@ describe('PositionRewards', () => {
             // console.log(`positionUnits:${positionUnits.toString()} maxExpected:${maxExpectedReward.toString()} claimed:${claimed.toString()} (${claimedTokens.toString()} GOVI)`);
             expect(claimedTokens).to.be.bignumber.below(new BN(amount).mul(new BN(MAX_REWARD_PERC)).div(new BN(100)));
             await this.platform.closePosition(positionUnits, new BN(CVI_VALUE), {from: bob});
-            // console.log(`${amount},${Number(claimedTokens.toString())}`);
+            print(`${amount},${Number(claimedTokens.toString())}`);
         }
     });
 
@@ -858,5 +862,48 @@ describe('PositionRewards', () => {
 
         const reward = await claimAndValidate(bob, toBN(1, 35), positionTimestamp);
         expect(reward).to.be.bignumber.lte(MAX_SINGLE_REWARD);
+    });
+
+    it('helper returns correct rewards', async () => {
+        const positionUnits = toTokenAmount(1000);
+
+        const openTimestamp = await time.latest();
+        await time.increase(SECONDS_PER_DAY);
+        const reward = await this.positionRewardsHelper.calculatePositionReward(positionUnits, openTimestamp);
+        const rewardTimestamp = await time.latest();
+
+        const expectedReward = calculateReward(positionUnits, rewardTimestamp.sub(openTimestamp));
+
+        expect(reward).to.be.bignumber.equal(expectedReward);
+    });
+
+    it('helper returns minimum after raising rewards', async () => {
+        await this.rewards.setRewardCalculationParameters(MAX_SINGLE_REWARD.mul(new BN(2)), MAX_LINEAR_POSITION_UNITS, MAX_LINEAR_GOVI, {from: admin});
+
+        const positionUnits = toTokenAmount(1000);
+
+        const openTimestamp = await time.latest();
+        await time.increase(SECONDS_PER_DAY);
+        const reward = await this.positionRewardsHelper.calculatePositionReward(positionUnits, openTimestamp);
+        const rewardTimestamp = await time.latest();
+
+        const expectedReward = calculateReward(positionUnits, rewardTimestamp.sub(openTimestamp));
+
+        expect(reward).to.be.bignumber.equal(expectedReward);
+    });
+
+    it('helper returns minimum after lowering rewards', async () => {
+        await this.rewards.setRewardCalculationParameters(MAX_SINGLE_REWARD.div(new BN(2)), MAX_LINEAR_POSITION_UNITS, MAX_LINEAR_GOVI, {from: admin});
+
+        const positionUnits = toTokenAmount(1000);
+
+        const openTimestamp = await time.latest();
+        await time.increase(SECONDS_PER_DAY);
+        const reward = await this.positionRewardsHelper.calculatePositionReward(positionUnits, openTimestamp);
+        const rewardTimestamp = await time.latest();
+
+        const expectedReward = calculateReward(positionUnits, rewardTimestamp.sub(openTimestamp), MAX_LINEAR_POSITION_UNITS, MAX_LINEAR_GOVI, MAX_SINGLE_REWARD.div(new BN(2)));
+
+        expect(reward).to.be.bignumber.equal(expectedReward);
     });
 });

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0
-pragma solidity 0.6.12;
+pragma solidity 0.7.6;
 pragma experimental ABIEncoderV2;
 
 import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
@@ -14,7 +14,7 @@ contract ETHStakingProxy is IETHStakingProxy, Ownable {
     IFeesCollector private feesCollector;
     IWETH private immutable wethToken;
 
-    constructor(IWETH _wethToken, IFeesCollector _feesCollector) public {
+    constructor(IWETH _wethToken, IFeesCollector _feesCollector) {
         feesCollector = _feesCollector;
         wethToken = _wethToken;
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0
-pragma solidity 0.6.12;
+pragma solidity 0.7.6;
 pragma experimental ABIEncoderV2;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
@@ -191,7 +191,7 @@ contract FeesCalculatorV3 is IFeesCalculatorV3, Ownable {
 
                 // Note: overflow is not possible as the exponent can only get larger, and other parts are constants
                 // However, 2 ** exponent can overflow if cvi value is wrong
-                require(exponent <= 256, "exponent overflow");
+                require(exponent < 256, "exponent overflow");
                 fundingFeeRatePercents = (PRECISION_DECIMALS / (2 ** exponent) / fundingFeeCoefficients[coefficientIndex]) + 
                     FUNDING_FEE_MIN_RATE;
 

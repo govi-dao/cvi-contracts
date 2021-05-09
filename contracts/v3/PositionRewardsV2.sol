@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0
-pragma solidity 0.6.12;
+pragma solidity 0.7.6;
 pragma experimental ABIEncoderV2;
 
 import "@openzeppelin/contracts/math/SafeMath.sol";
@@ -7,8 +7,6 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "./interfaces/IPositionRewardsV2.sol";
-
-//TODO: Handle leverage if not calling reward
 
 contract PositionRewardsV2 is IPositionRewardsV2, Ownable {
 
@@ -46,7 +44,7 @@ contract PositionRewardsV2 is IPositionRewardsV2, Ownable {
 
     PlatformV2 public platform;
 
-    constructor(IERC20 _cviToken) public {
+    constructor(IERC20 _cviToken) {
         cviToken = _cviToken;
     }
 
@@ -150,7 +148,7 @@ contract PositionRewardsV2 is IPositionRewardsV2, Ownable {
         require(_rewardMaxLinearGOVI > 0, "Max linear y must be positive");
 
         // Makes sure alpha and beta values for new values are positive
-        calculateAlphaBetaGamma(_newMaxSingleReward, _rewardMaxLinearPositionUnits, _rewardMaxLinearGOVI);
+        calculateAlphaBetaGamma(_newMaxSingleReward.div(rewardFactor), _rewardMaxLinearPositionUnits, _rewardMaxLinearGOVI.div(rewardFactor));
 
         lastRewardMaxLinearPositionUnits = rewardMaxLinearPositionUnits;
         rewardMaxLinearPositionUnits = _rewardMaxLinearPositionUnits;

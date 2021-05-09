@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0
-pragma solidity 0.6.12;
+pragma solidity 0.7.6;
 pragma experimental ABIEncoderV2;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
@@ -60,7 +60,7 @@ contract PlatformV2 is IPlatformV2, Ownable, ERC20, ReentrancyGuard {
     constructor(IERC20 _token, string memory _lpTokenName, string memory _lpTokenSymbolName, uint256 _initialTokenToLPTokenRate,
         IFeesCalculatorV3 _feesCalculator,
         ICVIOracleV3 _cviOracle,
-        ILiquidationV2 _liquidation) public ERC20(_lpTokenName, _lpTokenSymbolName) {
+        ILiquidationV2 _liquidation) ERC20(_lpTokenName, _lpTokenSymbolName) {
 
         token = _token;
         initialTokenToLPTokenRate = _initialTokenToLPTokenRate;
@@ -287,7 +287,7 @@ contract PlatformV2 is IPlatformV2, Ownable, ERC20, ReentrancyGuard {
 
             Position memory position = positions[_positionOwners[i]];
 
-            if (liquidation.isLiquidationCandidate(currentPositionBalance, isBalancePositive, position.positionUnitsAmount, position.openCVIValue, position.leverage)) {
+            if (position.positionUnitsAmount > 0 && liquidation.isLiquidationCandidate(currentPositionBalance, isBalancePositive, position.positionUnitsAmount, position.openCVIValue, position.leverage)) {
                 addressesToLiquidate[liquidationAddressesAmount] = _positionOwners[i];
                 liquidationAddressesAmount = liquidationAddressesAmount.add(1);
             }

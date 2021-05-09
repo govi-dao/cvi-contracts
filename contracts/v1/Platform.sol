@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0
-pragma solidity 0.6.12;
+pragma solidity 0.7.6;
 pragma experimental ABIEncoderV2;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
@@ -59,7 +59,7 @@ contract Platform is IPlatform, Ownable, ERC20 {
         IFeesModel _feesModel,
         IFeesCalculator _feesCalculator,
         ICVIOracle _cviOracle,
-        ILiquidation _liquidation) public ERC20(_lpTokenName, _lpTokenSymbolName) {
+        ILiquidation _liquidation) ERC20(_lpTokenName, _lpTokenSymbolName) {
 
         token = _token;
         initialTokenToLPTokenRate = _initialTokenToLPTokenRate;
