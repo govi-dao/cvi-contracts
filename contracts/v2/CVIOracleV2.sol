@@ -41,7 +41,7 @@ contract CVIOracleV2 is ICVIOracleV2 {
         require(cviOracleValue > 0, "CVI must be positive");
         uint256 cviValue = uint256(cviOracleValue);
         if (cviValue > MAX_CVI_VALUE) {
-            cviValue = MAX_CVI_VALUE / CVI_DECIMALS_TRUNCATE;
+            return uint16(MAX_CVI_VALUE / CVI_DECIMALS_TRUNCATE);
         }
         return uint16(cviValue / CVI_DECIMALS_TRUNCATE);
     }

@@ -22,6 +22,8 @@ contract PlatformV3 is IPlatformV3, Ownable, ERC20, ReentrancyGuard {
 
     uint80 public latestOracleRoundId;
     uint32 public latestSnapshotTimestamp;
+    uint32 public maxTimeAllowedAfterLatestRound = 5 hours;
+
     bool private canPurgeLatestSnapshot = false;
     bool public emergencyWithdrawAllowed = false;
     bool private purgeSnapshots = true;
@@ -108,7 +110,7 @@ contract PlatformV3 is IPlatformV3, Ownable, ERC20, ReentrancyGuard {
         require(position.positionUnitsAmount >= _positionUnitsAmount, "Not enough opened position units");
         require(block.timestamp.sub(position.creationTimestamp) >= buyersLockupPeriod  || noLockPositionAddresses[msg.sender], "Position locked");
 
-        (uint16 cviValue, uint256 latestSnapshot) = updateSnapshots(true);
+        (uint16 cviValue, uint256 latestSnapshot,) = updateSnapshots(true);
         require(cviValue >= _minCVI, "CVI too low");
 
         (uint256 positionBalance, uint256 fundingFees, uint256 marginDebt, bool wasLiquidated) = _closePosition(position, _positionUnitsAmount, latestSnapshot, cviValue);
@@ -209,13 +211,16 @@ contract PlatformV3 is IPlatformV3, Ownable, ERC20, ReentrancyGuard {
     function setLatestOracleRoundId(uint80 _newOracleRoundId) external override onlyOwner {
         latestOracleRoundId = _newOracleRoundId;
     }
-    
-    function setLPLockupPeriod(uint256 _newLPLockupPeriod) external override onlyOwner {
-        require(_newLPLockupPeriod <= 2 weeks, "Lockup too long");
-        lpsLockupPeriod = _newLPLockupPeriod;
+
+    function setMaxTimeAllowedAfterLatestRound(uint32 _newMaxTimeAllowedAfterLatestRound) external override onlyOwner {
+        require(_newMaxTimeAllowedAfterLatestRound >= 1 hours, "Max time too short");
+        maxTimeAllowedAfterLatestRound = _newMaxTimeAllowedAfterLatestRound;
     }
 
-    function setBuyersLockupPeriod(uint256 _newBuyersLockupPeriod) external override onlyOwner {
+    function setLockupPeriods(uint256 _newLPLockupPeriod, uint256 _newBuyersLockupPeriod) external override onlyOwner {
+        require(_newLPLockupPeriod <= 2 weeks, "Lockup too long");
+        lpsLockupPeriod = _newLPLockupPeriod;
+
         require(_newBuyersLockupPeriod <= 1 weeks, "Lockup too long");
         buyersLockupPeriod = _newBuyersLockupPeriod;
     }
@@ -280,9 +285,10 @@ contract PlatformV3 is IPlatformV3, Ownable, ERC20, ReentrancyGuard {
     }
 
     function calculateLatestTurbulenceIndicatorPercent() external view override returns (uint16) {
+        (uint16 latestCVIValue, ) = cviOracle.getCVIRoundData(latestOracleRoundId);
         SnapshotUpdate memory updateData = _updateSnapshots(latestSnapshotTimestamp);
         if (updateData.updatedTurbulenceData) {
-            return feesCalculator.calculateTurbulenceIndicatorPercent(updateData.totalTime, updateData.totalRounds);
+            return feesCalculator.calculateTurbulenceIndicatorPercent(updateData.totalTime, updateData.totalRounds, latestCVIValue, updateData.cviValue);
         } else {
             return feesCalculator.turbulenceIndicatorPercent();
         }
@@ -319,7 +325,8 @@ contract PlatformV3 is IPlatformV3, Ownable, ERC20, ReentrancyGuard {
         require(_tokenAmount > 0, "Tokens amount must be positive");
         lastDepositTimestamp[msg.sender] = block.timestamp;
 
-        (uint16 cviValue,) = updateSnapshots(true);
+        (uint16 cviValue,, uint256 cviValueTimestamp) = updateSnapshots(true);
+        require(cviValueTimestamp.add(maxTimeAllowedAfterLatestRound) >= block.timestamp, "Latest cvi too long ago");
 
         uint256 depositFee = _tokenAmount.mul(uint256(feesCalculator.depositFeePercent())) / MAX_FEE_PERCENTAGE;
 
@@ -348,7 +355,7 @@ contract PlatformV3 is IPlatformV3, Ownable, ERC20, ReentrancyGuard {
     function _withdraw(uint256 _tokenAmount, bool _shouldBurnMax, uint256 _maxLPTokenBurnAmount) internal returns (uint256 burntAmount, uint256 withdrawnAmount) {
         require(lastDepositTimestamp[msg.sender].add(lpsLockupPeriod) <= block.timestamp, "Funds are locked");
 
-        (uint16 cviValue,) = updateSnapshots(true);
+        (uint16 cviValue,,) = updateSnapshots(true);
 
         if (_shouldBurnMax) {
             burntAmount = _maxLPTokenBurnAmount;
@@ -394,6 +401,7 @@ contract PlatformV3 is IPlatformV3, Ownable, ERC20, ReentrancyGuard {
         uint256 maxPositionUnitsAmount;
         uint256 addedTotalLeveragedTokensAmount;
         uint256 __positionUnitsAmount;
+        uint256 cviValueTimestamp;
         uint168 buyingPremiumFee;
         uint168 buyingPremiumFeePercentage;
         uint16 cviValue;
@@ -409,8 +417,9 @@ contract PlatformV3 is IPlatformV3, Ownable, ERC20, ReentrancyGuard {
 
         OpenPositionLocals memory locals;
 
-        (locals.cviValue, locals.latestSnapshot) = updateSnapshots(false);
+        (locals.cviValue, locals.latestSnapshot, locals.cviValueTimestamp) = updateSnapshots(false);
         require(locals.cviValue <= _maxCVI, "CVI too high");
+        require(locals.cviValueTimestamp.add(maxTimeAllowedAfterLatestRound) >= block.timestamp, "Latest cvi too long ago");
 
         (locals.openPositionFeePercent, locals.buyingPremiumFeeMaxPercent) = feesCalculator.openPositionFees();
 
@@ -418,12 +427,12 @@ contract PlatformV3 is IPlatformV3, Ownable, ERC20, ReentrancyGuard {
         require(locals.openPositionFee < _tokenAmount, "Open fee too big");
 
         // Calculate buying premium fee, assuming the maxmimum 
+        locals.balance = getTokenBalance(_tokenAmount);
+
         if (_chargePremiumFee) {
             locals.maxPositionUnitsAmount = uint256(_tokenAmount).sub(locals.openPositionFee).mul(_leverage).mul(MAX_CVI_VALUE) / locals.cviValue;
             locals.minPositionUnitsAmount = locals.maxPositionUnitsAmount.
                 mul(MAX_FEE_PERCENTAGE.sub(locals.buyingPremiumFeeMaxPercent)) / MAX_FEE_PERCENTAGE;
-
-            locals.balance = getTokenBalance(_tokenAmount);
 
             locals.collateralRatio = 0;
             if (locals.balance > 0) {
@@ -538,6 +547,7 @@ contract PlatformV3 is IPlatformV3, Ownable, ERC20, ReentrancyGuard {
         uint256 singleUnitFundingFee;
         uint256 totalTime;
         uint256 totalRounds;
+        uint256 cviValueTimestamp;
         uint80 newLatestRoundId;
         uint16 cviValue;
         bool updatedSnapshot;
@@ -546,7 +556,8 @@ contract PlatformV3 is IPlatformV3, Ownable, ERC20, ReentrancyGuard {
         bool updatedTurbulenceData;
     }
 
-    function updateSnapshots(bool _canPurgeLatestSnapshot) private returns (uint16 latestCVIValue, uint256 latestSnapshot) {
+    function updateSnapshots(bool _canPurgeLatestSnapshot) private returns (uint16 latestCVIValue, uint256 latestSnapshot, uint256 latestCVIValueTimestamp) {
+        uint80 originalLatestRoundId = latestOracleRoundId;
         uint256 latestTimestamp = latestSnapshotTimestamp;
         SnapshotUpdate memory updateData = _updateSnapshots(latestTimestamp);
 
@@ -560,6 +571,7 @@ contract PlatformV3 is IPlatformV3, Ownable, ERC20, ReentrancyGuard {
         }
 
         if (updateData.updatedTurbulenceData) {
+            (latestCVIValue, ) = cviOracle.getCVIRoundData(originalLatestRoundId); 
             feesCalculator.updateTurbulenceIndicatorPercent(updateData.totalTime, updateData.totalRounds, latestCVIValue, updateData.cviValue);
         }
 
@@ -578,12 +590,13 @@ contract PlatformV3 is IPlatformV3, Ownable, ERC20, ReentrancyGuard {
             canPurgeLatestSnapshot = _canPurgeLatestSnapshot;
         }
 
-        return (updateData.cviValue, updateData.latestSnapshot);
+        return (updateData.cviValue, updateData.latestSnapshot, updateData.cviValueTimestamp);
     }
 
     function _updateSnapshots(uint256 _latestTimestamp) private view returns (SnapshotUpdate memory snapshotUpdate) {
         (uint16 cviValue, uint80 periodEndRoundId, uint256 periodEndTimestamp) = cviOracle.getCVILatestRoundData();
         snapshotUpdate.cviValue = cviValue;
+        snapshotUpdate.cviValueTimestamp = periodEndTimestamp;
 
         snapshotUpdate.latestSnapshot = cviSnapshots[block.timestamp];
         if (snapshotUpdate.latestSnapshot != 0) { // Block was already updated

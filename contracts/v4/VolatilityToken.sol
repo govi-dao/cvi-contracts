@@ -59,8 +59,10 @@ contract VolatilityToken is IVolatilityToken, Ownable, ElasticToken, ReentrancyG
         initialTokenToLPTokenRate = _initialTokenToLPTokenRate;
         leverage = _leverage;
 
-        token.approve(address(_platform), uint256(-1));
-        token.approve(address(_feesCollector), uint256(-1));
+        if (address(token) != address(0)) {
+            token.approve(address(_platform), uint256(-1));
+            token.approve(address(_feesCollector), uint256(-1));
+        }
     }
 
     // If not rebaser, the rebase underlying method will revert
@@ -76,7 +78,7 @@ contract VolatilityToken is IVolatilityToken, Ownable, ElasticToken, ReentrancyG
         uint256 minDeviation = cviValue.mul(minDeviationPercentage).div(MAX_PERCENTAGE);
         require(deviation >= minDeviation, "Not enough deviation");
 
-        uint256 delta = DELTA_PRECISION_DECIMALS.mul(cviValue).div(deviation).div(rebaseLag);
+        uint256 delta = DELTA_PRECISION_DECIMALS.mul(deviation).div(cviValue).div(rebaseLag);
         rebase(delta, positive);
     }
 
@@ -94,53 +96,63 @@ contract VolatilityToken is IVolatilityToken, Ownable, ElasticToken, ReentrancyG
 
     function fulfillMintRequest(uint256 _requestId) public virtual override nonReentrant returns (uint256 tokensMinted) {
         Request memory request = requests[_requestId];
-        (uint168 amountToFulfill, uint168 fulfillFees,) = preFulfillRequest(request, MINT_REQUEST_TYPE);
+        (uint168 amountToFulfill, uint168 fulfillFees,, bool wasLiquidated) = preFulfillRequest(_requestId, request, MINT_REQUEST_TYPE);
 
-        delete requests[_requestId];
-        tokensMinted = mintTokens(amountToFulfill, false);
+        if (!wasLiquidated) {
+            delete requests[_requestId];
+            tokensMinted = mintTokens(amountToFulfill, false);
 
-        emit FulfillRequest(_requestId, fulfillFees);
+            emit FulfillRequest(_requestId, fulfillFees);
+        }
     }
 
     function fulfillBurnRequest(uint256 _requestId) external override nonReentrant returns (uint256 tokensReceived) {
         Request memory request = requests[_requestId];
-        (uint168 amountToFulfill,, uint16 fulfillFeesPercentage) = preFulfillRequest(request, BURN_REQUEST_TYPE);
+        (uint168 amountToFulfill,, uint16 fulfillFeesPercentage, bool wasLiquiudated) = preFulfillRequest(_requestId, request, BURN_REQUEST_TYPE);
 
-        delete requests[_requestId];
+        if (!wasLiquiudated) {
+            delete requests[_requestId];
 
-        uint256 fulfillFees;
-        (tokensReceived, fulfillFees) = burnTokens(amountToFulfill, request.timeDelayRequestFeesPercent, fulfillFeesPercentage);
+            uint256 fulfillFees;
+            (tokensReceived, fulfillFees) = burnTokens(amountToFulfill, request.timeDelayRequestFeesPercent, fulfillFeesPercentage);
 
-        emit FulfillRequest(_requestId, fulfillFees);
+            emit FulfillRequest(_requestId, fulfillFees);
+        }
     }
 
     function fulfillCollateralizedMintRequest(uint256 _requestId) public virtual override nonReentrant returns (uint256 tokensMinted, uint256 shortTokensMinted) {
         Request memory request = requests[_requestId];
-        (uint168 amountToFulfill, uint168 fulfillFees,) = preFulfillRequest(request, COLLATERALIZED_MINT_REQUEST_TYPE);
+        (uint168 amountToFulfill, uint168 fulfillFees,, bool wasLiquidated) = preFulfillRequest(_requestId, request, COLLATERALIZED_MINT_REQUEST_TYPE);
 
-        delete requests[_requestId];
-        (tokensMinted, shortTokensMinted) = mintCollateralizedTokens(amountToFulfill);
+        if (!wasLiquidated) {
+            delete requests[_requestId];
+            (tokensMinted, shortTokensMinted) = mintCollateralizedTokens(amountToFulfill);
 
-        emit FulfillRequest(_requestId, fulfillFees);
+            emit FulfillRequest(_requestId, fulfillFees);
+        }
     }
 
     function liquidateRequest(uint256 _requestId) external override nonReentrant returns (uint256 findersFeeAmount) {
         Request memory request = requests[_requestId];
         if (requestFeesCalculator.isLiquidable(request)) {
-            uint168 timeDelayFeeAmount = request.tokenAmount.mul(request.timeDelayRequestFeesPercent).div(MAX_PERCENTAGE);
-            uint168 maxFeesAmount = request.tokenAmount.mul(request.maxRequestFeesPercent).div(MAX_PERCENTAGE);
-            uint256 leftAmount = timeDelayFeeAmount.add(maxFeesAmount);
-
-            if (request.requestType == BURN_REQUEST_TYPE) {
-                leftAmount = _burnTokens(leftAmount);
-            }
-
-            findersFeeAmount = requestFeesCalculator.calculateFindersFee(leftAmount);
-            delete requests[_requestId];
-
-            sendProfit(leftAmount.sub(findersFeeAmount), token);
-            transferFunds(findersFeeAmount);
+            findersFeeAmount = _liquidateRequest(_requestId, request);
         }
+    }
+
+    function _liquidateRequest(uint256 _requestId, Request memory _request) private returns (uint256 findersFeeAmount) {
+        uint168 timeDelayFeeAmount = _request.tokenAmount.mul(_request.timeDelayRequestFeesPercent).div(MAX_PERCENTAGE);
+        uint168 maxFeesAmount = _request.tokenAmount.mul(_request.maxRequestFeesPercent).div(MAX_PERCENTAGE);
+        uint256 leftAmount = timeDelayFeeAmount.add(maxFeesAmount);
+
+        if (_request.requestType == BURN_REQUEST_TYPE) {
+            leftAmount = _burnTokens(leftAmount);
+        }
+
+        findersFeeAmount = requestFeesCalculator.calculateFindersFee(leftAmount);
+        delete requests[_requestId];
+
+        sendProfit(leftAmount.sub(findersFeeAmount), token);
+        transferFunds(findersFeeAmount);
     }
 
     function setPlatform(IPlatformV3 _newPlatform) external override onlyOwner {
@@ -205,22 +217,27 @@ contract VolatilityToken is IVolatilityToken, Ownable, ElasticToken, ReentrancyG
         collectRelevantTokens(_type, timeDelayFeeAmount.add(maxFeesAmount));
     }
 
-    function preFulfillRequest(Request memory _request, uint8 _expectedType) private returns (uint168 amountToFulfill, uint168 fulfillFees, uint16 fulfillFeesPercentage) {
+    function preFulfillRequest(uint256 _requestId, Request memory _request, uint8 _expectedType) private returns (uint168 amountToFulfill, uint168 fulfillFees, uint16 fulfillFeesPercentage, bool wasLiquidated) {
         require(_request.owner == msg.sender, "Not owner");
         require(_request.requestType == _expectedType, "Wrong request type");
 
-        fulfillFeesPercentage = requestFeesCalculator.calculateTimePenaltyFee(_request);
-        uint168 timeDelayFees = _request.tokenAmount.mul(_request.timeDelayRequestFeesPercent).div(MAX_PERCENTAGE);
-
-        uint256 tokensLeftToTransfer = _request.tokenAmount.sub(timeDelayFees).sub(_request.tokenAmount.mul(_request.maxRequestFeesPercent).div(MAX_PERCENTAGE));
-        collectRelevantTokens(_request.requestType, tokensLeftToTransfer);
-
-        if (_request.requestType == BURN_REQUEST_TYPE) {
-            amountToFulfill = _request.tokenAmount;
+        if (requestFeesCalculator.isLiquidable(_request)) {
+            _liquidateRequest(_requestId, _request);
+            wasLiquidated = true;
         } else {
-            fulfillFees = _request.tokenAmount.mul(fulfillFeesPercentage).div(MAX_PERCENTAGE);
-            amountToFulfill = _request.tokenAmount.sub(timeDelayFees).sub(fulfillFees);
-            sendProfit(timeDelayFees.add(fulfillFees), token);
+            fulfillFeesPercentage = requestFeesCalculator.calculateTimePenaltyFee(_request);
+            uint168 timeDelayFees = _request.tokenAmount.mul(_request.timeDelayRequestFeesPercent).div(MAX_PERCENTAGE);
+
+            uint256 tokensLeftToTransfer = _request.tokenAmount.sub(timeDelayFees).sub(_request.tokenAmount.mul(_request.maxRequestFeesPercent).div(MAX_PERCENTAGE));
+            collectRelevantTokens(_request.requestType, tokensLeftToTransfer);
+
+            if (_request.requestType == BURN_REQUEST_TYPE) {
+                amountToFulfill = _request.tokenAmount;
+            } else {
+                fulfillFees = _request.tokenAmount.mul(fulfillFeesPercentage).div(MAX_PERCENTAGE);
+                amountToFulfill = _request.tokenAmount.sub(timeDelayFees).sub(fulfillFees);
+                sendProfit(timeDelayFees.add(fulfillFees), token);
+            }
         }
     }
 
@@ -237,7 +254,7 @@ contract VolatilityToken is IVolatilityToken, Ownable, ElasticToken, ReentrancyG
         uint256 supply = totalSupply;
 
         (, uint256 positionedTokenAmount) = openPosition(_tokenAmount, !_isCollateralized);
-    
+   
         if (supply > 0 && balance > 0) {
             tokensMinted = positionedTokenAmount.mul(supply) / balance;
         } else {
@@ -265,36 +282,40 @@ contract VolatilityToken is IVolatilityToken, Ownable, ElasticToken, ReentrancyG
     }
 
     function _burnTokens(uint256 _tokenAmount) private returns (uint256 tokensReceived) {
-        require(address(platform) != address(0), "Platform not set");
-        require(_tokenAmount <= balanceOf(msg.sender), "Not enough LP tokens for account");
-
         (,, uint168 totalPositionUnits,,,) = platform.calculatePositionBalance(address(this));
         uint256 positionUnits = uint256(totalPositionUnits).mul(_tokenAmount).div(totalSupply);
         require(positionUnits == uint168(positionUnits), "Too much position units");
 
         tokensReceived = platform.closePosition(uint168(positionUnits), 0);
-        _burn(msg.sender, _tokenAmount);
+        _burn(address(this), _tokenAmount);
     }
 
     function mintCollateralizedTokens(uint168 _tokenAmount) private returns (uint256 tokensMinted, uint256 shortTokensMinted) {
         (uint256 cviValue,,) = cviOracle.getCVILatestRoundData();
         uint256 openFee = feesCalculator.openPositionFeePercent();
         uint256 depositFee = feesCalculator.depositFeePercent();
-        uint256 nominator = cviValue.mul(_tokenAmount).mul(uint256(MAX_PERCENTAGE).sub(openFee));
-        uint256 depositAmount = nominator.div((cviValue.mul(MAX_CVI_VALUE).add(uint256(MAX_CVI_VALUE).mul(MAX_PERCENTAGE)).sub(cviValue.mul(openFee)).sub(depositFee.mul(MAX_CVI_VALUE))));
-        
+
+        // Note: calculate the deposit amount so that it is exactly (MAX_CVI_VALUE / cviValue - 1) times bigger than the rest of amount that will be used to open a position
+        // Therefore, liquidity is fully provided along, allowing to not charge premium fees
+        uint256 nominator = uint256(MAX_CVI_VALUE).sub(cviValue).mul(_tokenAmount).mul(uint256(MAX_PERCENTAGE).sub(openFee));
+        uint256 depositAmount = nominator.div((cviValue.mul(openFee).add(uint256(MAX_CVI_VALUE).mul(MAX_PERCENTAGE)).sub(openFee.mul(MAX_CVI_VALUE)).sub(depositFee.mul(cviValue))));
+
         require(depositAmount < _tokenAmount, "Amounts calculation error");
         uint168 mintAmount = _tokenAmount - uint168(depositAmount);
 
         tokensMinted = mintTokens(mintAmount, true);
-        shortTokensMinted = deposit(depositAmount);
-        IERC20(address(platform)).safeTransfer(msg.sender, shortTokensMinted);
+
+        if (depositAmount > 0) {
+            shortTokensMinted = deposit(depositAmount);
+            IERC20(address(platform)).safeTransfer(msg.sender, shortTokensMinted);
+        }
 
         emit CollateralizedMint(msg.sender, _tokenAmount, tokensMinted, shortTokensMinted);
     }
 
     function collectRelevantTokens(uint8 _requestType, uint256 _tokenAmount) private {
         if (_requestType == BURN_REQUEST_TYPE) {
+            require(balanceOf(msg.sender) >= _tokenAmount, "Not enough tokens");
             IERC20(address(this)).safeTransferFrom(msg.sender, address(this), _tokenAmount);
         } else {
             collectTokens(_tokenAmount);

@@ -22,29 +22,28 @@ contract RequestFeesCalculator is IRequestFeesCalculator, Ownable {
 
 	uint32 public minWaitTime = 15 minutes;
 
-	//TOOD: Default values
-	uint16 public minTimePenaltyFeePercent = 300;
-	uint16 public midTimePenaltyFeePercent = 300;
-	uint16 public maxTimePenaltyFeePercent = 500;
+	uint16 public beforeTargetTimeMaxPenaltyFeePercent = 300;
+	uint16 public afterTargetMidTimePenaltyFeePercent = 300;
+	uint16 public afterTargetMaxTimePenaltyFeePercent = 500;
 
 	uint16 public findersFeePercent = 5000;
 
-	uint32 public midTime = 1 hours;
-	uint32 public maxTime = 12 hours;
+	uint32 public afterTargetMidTime = 1 hours;
+	uint32 public afterTargetMaxTime = 12 hours;
 
 	function calculateTimePenaltyFee(IVolatilityToken.Request calldata _request) external view override returns (uint16 feePercentage) {
-		feePercentage = maxTimePenaltyFeePercent;
+		feePercentage = afterTargetMaxTimePenaltyFeePercent;
 
 		if (block.timestamp < _request.targetTimestamp) {
-			// Linear decreasing between minTimePenaltyFeePercent and 0
+			// Linear decreasing between beforeTargetTimeMaxPenaltyFeePercent and 0
             require(block.timestamp >= uint256(_request.requestTimestamp).add(minWaitTime), "Min wait time not over");
-			feePercentage = uint16(uint256(_request.targetTimestamp).sub(block.timestamp).mul(minTimePenaltyFeePercent).div(uint256(_request.targetTimestamp).sub(_request.requestTimestamp).sub(minWaitTime)));
-		} else if (block.timestamp < uint256(_request.targetTimestamp).add(midTime)) {
-			// Linear increasing between 0 and midTimePnealtyFee
-			feePercentage = uint16((block.timestamp - _request.targetTimestamp).mul(midTimePenaltyFeePercent).div(midTime));
-		} else if (block.timestamp < uint256(_request.targetTimestamp).add(maxTime)) {
-			// Between midTimePenaltyFeePercent and maxTimePenaltyFeePercent
-			feePercentage = uint16((block.timestamp - _request.targetTimestamp - midTime).mul(maxTimePenaltyFeePercent - midTimePenaltyFeePercent).div(maxTime - midTime).add(midTimePenaltyFeePercent));
+			feePercentage = uint16(uint256(_request.targetTimestamp).sub(block.timestamp).mul(beforeTargetTimeMaxPenaltyFeePercent).div(uint256(_request.targetTimestamp).sub(_request.requestTimestamp).sub(minWaitTime)));
+		} else if (block.timestamp < uint256(_request.targetTimestamp).add(afterTargetMidTime)) {
+			// Linear increasing between 0 and afterTargetMidTimePenaltyFeePercent
+			feePercentage = uint16((block.timestamp - _request.targetTimestamp).mul(afterTargetMidTimePenaltyFeePercent).div(afterTargetMidTime));
+		} else if (block.timestamp < uint256(_request.targetTimestamp).add(afterTargetMaxTime)) {
+			// Between afterTargetMidTimePenaltyFeePercent and afterTargetMaxTimePenaltyFeePercent
+			feePercentage = uint16((block.timestamp - _request.targetTimestamp - afterTargetMidTime).mul(afterTargetMaxTimePenaltyFeePercent - afterTargetMidTimePenaltyFeePercent).div(afterTargetMaxTime - afterTargetMidTime).add(afterTargetMidTimePenaltyFeePercent));
 		}
 	}
 
@@ -61,7 +60,7 @@ contract RequestFeesCalculator is IRequestFeesCalculator, Ownable {
     }
 
     function isLiquidable(IVolatilityToken.Request calldata _request) external view override returns (bool liquidable) {
-    	if (block.timestamp > uint256(_request.targetTimestamp).add(maxTime)) {
+    	if (block.timestamp > uint256(_request.targetTimestamp).add(afterTargetMaxTime)) {
     		return true;
     	}
 
@@ -88,18 +87,18 @@ contract RequestFeesCalculator is IRequestFeesCalculator, Ownable {
     	minWaitTime = _minWaitTime;
     }
 
-    function setTimePenaltyFeeParameters(uint16 _minTimePenaltyFeePercent, uint32 _midTime, uint16 _midTimePenaltyFeePercent, uint32 _maxTime, uint16 _maxTimePenaltyFeePercent) external override onlyOwner {
-    	require(_minTimePenaltyFeePercent <= MAX_FEE_PERCENTAGE, "Min fee larger than max fee");
-    	require(_midTimePenaltyFeePercent <= MAX_FEE_PERCENTAGE, "Mid fee larger than max fee");
-    	require(_maxTimePenaltyFeePercent <= MAX_FEE_PERCENTAGE, "Max fee larger than max fee");
-    	require(_midTime <= _maxTime, "Max time before mid time");
-    	require(_midTimePenaltyFeePercent <= _maxTimePenaltyFeePercent, "Max fee less than mid fee");
+    function setTimePenaltyFeeParameters(uint16 _beforeTargetTimeMaxPenaltyFeePercent, uint32 _afterTargetMidTime, uint16 _afterTargetMidTimePenaltyFeePercent, uint32 _afterTargetMaxTime, uint16 _afterTargetMaxTimePenaltyFeePercent) external override onlyOwner {
+    	require(_beforeTargetTimeMaxPenaltyFeePercent <= MAX_FEE_PERCENTAGE, "Min fee larger than max fee");
+    	require(_afterTargetMidTimePenaltyFeePercent <= MAX_FEE_PERCENTAGE, "Mid fee larger than max fee");
+    	require(_afterTargetMaxTimePenaltyFeePercent <= MAX_FEE_PERCENTAGE, "Max fee larger than max fee");
+    	require(_afterTargetMidTime <= _afterTargetMaxTime, "Max time before mid time");
+    	require(_afterTargetMidTimePenaltyFeePercent <= _afterTargetMaxTimePenaltyFeePercent, "Max fee less than mid fee");
 
-    	minTimePenaltyFeePercent = _minTimePenaltyFeePercent;
-    	midTime = _midTime;
-    	midTimePenaltyFeePercent = _midTimePenaltyFeePercent;
-    	maxTime = _maxTime;
-    	maxTimePenaltyFeePercent = _maxTimePenaltyFeePercent;
+    	beforeTargetTimeMaxPenaltyFeePercent = _beforeTargetTimeMaxPenaltyFeePercent;
+    	afterTargetMidTime = _afterTargetMidTime;
+    	afterTargetMidTimePenaltyFeePercent = _afterTargetMidTimePenaltyFeePercent;
+    	afterTargetMaxTime = _afterTargetMaxTime;
+    	afterTargetMaxTimePenaltyFeePercent = _afterTargetMaxTimePenaltyFeePercent;
     }
 
     function setFindersFee(uint16 _findersFeePercent) external override onlyOwner {
@@ -108,6 +107,6 @@ contract RequestFeesCalculator is IRequestFeesCalculator, Ownable {
     }
 
     function getMaxFees(uint256 _tokenAmount) external view override returns (uint16 maxFeesPercent) {
-		return maxTimePenaltyFeePercent;
+		return afterTargetMaxTimePenaltyFeePercent;
     }
 }

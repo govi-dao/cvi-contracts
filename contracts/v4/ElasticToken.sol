@@ -74,7 +74,7 @@ contract ElasticToken is IElasticToken, Ownable {
 
         _underlyingBalances[to] = _underlyingBalances[to].sub(underlyingValue, "Burn amount exceeds balance");
 
-        emit Transfer(address(0), to, amount);
+        emit Transfer(to, address(0), amount);
     }
 
     function transfer(address to, uint256 value) external override validRecipient(to) returns (bool) {
@@ -94,7 +94,7 @@ contract ElasticToken is IElasticToken, Ownable {
     function transferFrom(address from, address to, uint256 value) external override validRecipient(from) validRecipient(to) returns (bool) {
         _beforeTokenTransfer(from, to, value);
 
-        _allowedFragments[from][msg.sender] = _allowedFragments[from][msg.sender].sub(value);
+        _allowedFragments[from][msg.sender] = _allowedFragments[from][msg.sender].sub(value, "No allowance");
 
         uint256 underlyingValue = valueToUnderlying(value);
         _underlyingBalances[from] = _underlyingBalances[from].sub(underlyingValue);

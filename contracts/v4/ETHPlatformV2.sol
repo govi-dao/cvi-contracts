@@ -32,6 +32,7 @@ contract ETHPlatformV2 is PlatformV3, IETHPlatformV2 {
 
     function openPositionWithoutPremiumFeeETH(uint16 _maxCVI, uint168 _maxBuyingPremiumFeePercentage, uint8 _leverage) external override payable returns (uint168 positionUnitsAmount, uint168 positionedTokenAmount) {
         require(uint168(msg.value) == msg.value, "Too much ETH");
+        require(noPremiumFeeAllowedAddresses[msg.sender], "Not allowed");
         return _openPosition(uint168(msg.value), _maxCVI, _maxBuyingPremiumFeePercentage, _leverage, false);   
     }
 

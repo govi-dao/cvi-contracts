@@ -25,8 +25,10 @@ interface IFeesCalculatorV4 {
     function setBuyingPremiumThreshold(uint16 newBuyingPremiumThreshold) external;
     function setTurbulenceStep(uint16 newTurbulenceStepPercentage) external;
     function setMaxTurbulenceFeePercentToTrim(uint16 newMaxTurbulenceFeePercentToTrim) external;
+    function setTurbulenceDeviationThresholdPercent(uint16 _newTurbulenceDeviationThresholdPercent) external;
+    function setTurbulenceDeviationPercent(uint16 _newTurbulenceDeviationPercentage) external;
 
-    function calculateTurbulenceIndicatorPercent(uint256 totalHeartbeats, uint256 newRounds) external view returns (uint16);
+    function calculateTurbulenceIndicatorPercent(uint256 totalHeartbeats, uint256 newRounds, uint16 _lastCVIValue, uint16 _currCVIValue) external view returns (uint16);
 
     function calculateBuyingPremiumFee(uint168 tokenAmount, uint8 leverage, uint256 collateralRatio) external view returns (uint168 buyingPremiumFee, uint16 combinedPremiumFeePercentage);
     function calculateBuyingPremiumFeeWithTurbulence(uint168 tokenAmount, uint8 leverage, uint256 collateralRatio, uint16 turbulenceIndicatorPercent) external view returns (uint168 buyingPremiumFee, uint16 combinedPremiumFeePercentage);

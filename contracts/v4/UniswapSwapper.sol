@@ -18,6 +18,7 @@ contract UniswapSwapper is IUniswapSwapper, ISwapper, Ownable {
     IERC20 private wethToken;
     IUniswapV2Router02 private uniswapRouter;
 
+    uint256 private maxSwapETHAmount;
     address private stakingAddress;
 
     modifier onlyStaking {
@@ -38,15 +39,30 @@ contract UniswapSwapper is IUniswapSwapper, ISwapper, Ownable {
         _removedToken.safeApprove(address(uniswapRouter), 0);
     }
 
-    function swapToWETH(IERC20 _token, uint256 _tokenAmount) external override onlyStaking returns (uint256 wethAmount) {
-        _token.safeTransferFrom(msg.sender, address(this), _tokenAmount);
+    function setMaxSwapETHAmount(uint256 _newMaxAmount) external override onlyOwner {
+        require(_newMaxAmount > 0, "Max amount must be positive");
+        maxSwapETHAmount = _newMaxAmount;
+    }
 
+    function swapToWETH(IERC20 _token, uint256 _tokenAmount) external override onlyStaking returns (uint256 wethAmount) {
         address[] memory path = new address[](2);
         path[0] = address(_token);
         path[1] = address(wethToken);
 
+        uint[] memory _tokenAmountsOut = uniswapRouter.getAmountsOut(_tokenAmount, path);
+        uint _tokenAmountWeth = _tokenAmountsOut[0];
+        
+        uint256 _tokenAmountToSwap = _tokenAmount;
+
+        if (_tokenAmountWeth > maxSwapETHAmount) {
+            uint[] memory _tokenAmountsIn = uniswapRouter.getAmountsIn(maxSwapETHAmount, path);
+            _tokenAmountToSwap = _tokenAmountsIn[0];
+        }
+        
+        _token.safeTransferFrom(msg.sender, address(this), _tokenAmountToSwap);
+
         uint256[] memory amounts = 
-            uniswapRouter.swapExactTokensForTokens(_tokenAmount, 
+            uniswapRouter.swapExactTokensForTokens(_tokenAmountToSwap, 
                 0, path, address(this), block.timestamp);
 
         wethAmount = amounts[1];

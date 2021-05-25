@@ -21,6 +21,7 @@ contract FeesCalculatorV4 is IFeesCalculatorV4, Ownable {
     uint256 private constant FUNDING_FEE_MIN_RATE = 2000;
     uint256 private constant FUNDING_FEE_MAX_RATE = 100000;
     uint256 private constant FUNDING_FEE_BASE_PERIOD = 1 days;
+    uint256 private constant FUNDING_FEE_CONSTANT_RATE = 3000;
 
     uint256 private constant MAX_FUNDING_FEE_PERCENTAGE = 1000000;
 
@@ -28,7 +29,7 @@ contract FeesCalculatorV4 is IFeesCalculatorV4, Ownable {
     uint16 private constant CVI_DECIMALS = 100;
 
     uint16 private constant MAX_FUNDING_FEE_CVI_THRESHOLD = 55;
-    uint16 private constant MIN_FUDNING_FEE_CVI_THRESHOLD = 110;
+    uint16 private constant MIN_FUDNING_FEE_CVI_THRESHOLD = 150;
     uint16 private constant FUNDING_FEE_DIVISION_FACTOR = 5;
 
     uint16 private constant MAX_PERCENTAGE = 10000;
@@ -50,6 +51,9 @@ contract FeesCalculatorV4 is IFeesCalculatorV4, Ownable {
     uint256 public oracleHeartbeatPeriod = 55 minutes;
     uint256 public closePositionFeeDecayPeriod = 24 hours;
 
+    uint16 public turbulenceDeviationThresholdPercent = 7000; // 1.0 is MAX_PERCENTAGE = 10000
+    uint16 public turbulenceDeviationPercentage = 500; // 1.0 is MAX_PERCENTAGE = 10000
+
     address public turbulenceUpdator;
 
     modifier onlyTurbulenceUpdator {
@@ -59,7 +63,7 @@ contract FeesCalculatorV4 is IFeesCalculatorV4, Ownable {
 
     function updateTurbulenceIndicatorPercent(uint256 _totalTime, uint256 _newRounds, uint16 _lastCVIValue, uint16 _currCVIValue) external override onlyTurbulenceUpdator returns (uint16) {
         uint256 totalHeartbeats = _totalTime / oracleHeartbeatPeriod;
-        uint16 updatedTurbulenceIndicatorPercent = calculateTurbulenceIndicatorPercent(totalHeartbeats, _newRounds);
+        uint16 updatedTurbulenceIndicatorPercent = calculateTurbulenceIndicatorPercent(totalHeartbeats, _newRounds, _lastCVIValue, _currCVIValue);
 
         if (updatedTurbulenceIndicatorPercent != turbulenceIndicatorPercent) {
             turbulenceIndicatorPercent = updatedTurbulenceIndicatorPercent;
@@ -127,14 +131,28 @@ contract FeesCalculatorV4 is IFeesCalculatorV4, Ownable {
         maxTurbulenceFeePercentToTrim = _newMaxTurbulenceFeePercentToTrim;
     }
 
-    function calculateTurbulenceIndicatorPercent(uint256 totalHeartbeats, uint256 newRounds) public view override returns (uint16) {
+     function setTurbulenceDeviationThresholdPercent(uint16 _newTurbulenceDeviationThresholdPercent) external override onlyOwner {
+        require(_newTurbulenceDeviationThresholdPercent < MAX_PERCENTAGE, "Threshold exceeds maximum");
+        turbulenceDeviationThresholdPercent = _newTurbulenceDeviationThresholdPercent;
+    }
+
+    function setTurbulenceDeviationPercent(uint16 _newTurbulenceDeviationPercentage) external override onlyOwner {
+        require(_newTurbulenceDeviationPercentage < MAX_PERCENTAGE, "Deviation exceeds maximum");
+        turbulenceDeviationPercentage = _newTurbulenceDeviationPercentage;
+    }
+
+    function calculateTurbulenceIndicatorPercent(uint256 totalHeartbeats, uint256 newRounds, uint16 _lastCVIValue, uint16 _currCVIValue) public view override returns (uint16) {
         uint16 updatedTurbulenceIndicatorPercent = turbulenceIndicatorPercent;
+
+        uint256 deltaCVIAbsPercent = _currCVIValue > _lastCVIValue ? (_currCVIValue - _lastCVIValue).mul(MAX_PERCENTAGE) / _lastCVIValue : (_lastCVIValue - _currCVIValue).mul(MAX_PERCENTAGE) / _lastCVIValue;
+        uint256 maxAllowedTurbulenceTimes = (deltaCVIAbsPercent * MAX_PERCENTAGE) / (turbulenceDeviationThresholdPercent * turbulenceDeviationPercentage);
 
         uint256 decayTimes = 0;
         uint256 turbulenceTimes = 0;
         if (newRounds > totalHeartbeats) {
             turbulenceTimes = newRounds - totalHeartbeats;
-            decayTimes = totalHeartbeats;
+            turbulenceTimes = turbulenceTimes >  maxAllowedTurbulenceTimes ? maxAllowedTurbulenceTimes : turbulenceTimes;
+            decayTimes = newRounds - turbulenceTimes;
         } else {
             decayTimes = newRounds;
         }
@@ -193,7 +211,7 @@ contract FeesCalculatorV4 is IFeesCalculatorV4, Ownable {
                 // However, 2 ** exponent can overflow if cvi value is wrong
                 require(exponent < 256, "exponent overflow");
                 fundingFeeRatePercents = (PRECISION_DECIMALS / (2 ** exponent) / fundingFeeCoefficients[coefficientIndex]) + 
-                    FUNDING_FEE_MIN_RATE;
+                    FUNDING_FEE_CONSTANT_RATE;
 
                 if (fundingFeeRatePercents > FUNDING_FEE_MAX_RATE) {
                     fundingFeeRatePercents = FUNDING_FEE_MAX_RATE;

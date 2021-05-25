@@ -51,9 +51,9 @@ interface IPlatformV3 {
     function setLiquidation(ILiquidationV2 newLiquidation) external;
 
     function setLatestOracleRoundId(uint80 newOracleRoundId) external;
+    function setMaxTimeAllowedAfterLatestRound(uint32 newMaxTimeAllowedAfterLatestRound) external;
 
-    function setLPLockupPeriod(uint256 newLPLockupPeriod) external;
-    function setBuyersLockupPeriod(uint256 newBuyersLockupPeriod) external;
+    function setLockupPeriods(uint256 newLPLockupPeriod, uint256 newBuyersLockupPeriod) external;
 
     function setEmergencyWithdrawAllowed(bool newEmergencyWithdrawAllowed) external;
     function setStakingContractAddress(address newStakingContractAddress) external;
