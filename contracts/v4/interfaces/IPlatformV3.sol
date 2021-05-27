@@ -55,10 +55,9 @@ interface IPlatformV3 {
 
     function setLockupPeriods(uint256 newLPLockupPeriod, uint256 newBuyersLockupPeriod) external;
 
-    function setEmergencyWithdrawAllowed(bool newEmergencyWithdrawAllowed) external;
     function setStakingContractAddress(address newStakingContractAddress) external;
 
-    function setCanPurgeSnapshots(bool newCanPurgeSnapshots) external;
+    function setEmergencyParameters(bool newEmergencyWithdrawAllowed, bool newCanPurgeSnapshots) external;
 
     function setMaxAllowedLeverage(uint8 newMaxAllowedLeverage) external;
 

@@ -61,9 +61,9 @@ contract FeesCalculatorV4 is IFeesCalculatorV4, Ownable {
         _;
     }
 
-    function updateTurbulenceIndicatorPercent(uint256 _totalTime, uint256 _newRounds, uint16 _lastCVIValue, uint16 _currCVIValue) external override onlyTurbulenceUpdator returns (uint16) {
+    function updateTurbulenceIndicatorPercent(uint256 _totalTime, uint256 _newRounds, uint16 _lastCVIValue, uint16 _currCVIValue) external override onlyTurbulenceUpdator returns (uint16 updatedTurbulenceIndicatorPercent) {
         uint256 totalHeartbeats = _totalTime / oracleHeartbeatPeriod;
-        uint16 updatedTurbulenceIndicatorPercent = calculateTurbulenceIndicatorPercent(totalHeartbeats, _newRounds, _lastCVIValue, _currCVIValue);
+        updatedTurbulenceIndicatorPercent = calculateTurbulenceIndicatorPercent(totalHeartbeats, _newRounds, _lastCVIValue, _currCVIValue);
 
         if (updatedTurbulenceIndicatorPercent != turbulenceIndicatorPercent) {
             turbulenceIndicatorPercent = updatedTurbulenceIndicatorPercent;
@@ -144,8 +144,8 @@ contract FeesCalculatorV4 is IFeesCalculatorV4, Ownable {
     function calculateTurbulenceIndicatorPercent(uint256 totalHeartbeats, uint256 newRounds, uint16 _lastCVIValue, uint16 _currCVIValue) public view override returns (uint16) {
         uint16 updatedTurbulenceIndicatorPercent = turbulenceIndicatorPercent;
 
-        uint256 deltaCVIAbsPercent = _currCVIValue > _lastCVIValue ? (_currCVIValue - _lastCVIValue).mul(MAX_PERCENTAGE) / _lastCVIValue : (_lastCVIValue - _currCVIValue).mul(MAX_PERCENTAGE) / _lastCVIValue;
-        uint256 maxAllowedTurbulenceTimes = (deltaCVIAbsPercent * MAX_PERCENTAGE) / (turbulenceDeviationThresholdPercent * turbulenceDeviationPercentage);
+        uint256 CVIDeltaPercent = uint256(_currCVIValue > _lastCVIValue ? _currCVIValue - _lastCVIValue : _lastCVIValue - _currCVIValue).mul(MAX_PERCENTAGE).div(_lastCVIValue);
+        uint256 maxAllowedTurbulenceTimes = CVIDeltaPercent.mul(MAX_PERCENTAGE).div(uint256(turbulenceDeviationThresholdPercent).mul(turbulenceDeviationPercentage));
 
         uint256 decayTimes = 0;
         uint256 turbulenceTimes = 0;

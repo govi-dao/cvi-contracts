@@ -279,6 +279,8 @@ contract VolatilityToken is IVolatilityToken, Ownable, ElasticToken, ReentrancyG
 
         tokensReceived = tokensReceived.sub(fulfillFees).sub(timeDelayFee);
         transferFunds(tokensReceived);
+
+        emit Burn(msg.sender, tokensReceived, _tokenAmount);
     }
 
     function _burnTokens(uint256 _tokenAmount) private returns (uint256 tokensReceived) {
@@ -286,7 +288,7 @@ contract VolatilityToken is IVolatilityToken, Ownable, ElasticToken, ReentrancyG
         uint256 positionUnits = uint256(totalPositionUnits).mul(_tokenAmount).div(totalSupply);
         require(positionUnits == uint168(positionUnits), "Too much position units");
 
-        tokensReceived = platform.closePosition(uint168(positionUnits), 0);
+        tokensReceived = platform.closePosition(uint168(positionUnits), 1);
         _burn(address(this), _tokenAmount);
     }
 

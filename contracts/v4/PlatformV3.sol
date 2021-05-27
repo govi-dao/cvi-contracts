@@ -241,16 +241,13 @@ contract PlatformV3 is IPlatformV3, Ownable, ERC20, ReentrancyGuard {
         revertLockedTransfered[msg.sender] = _revertLockedTransfers;   
     }
 
-    function setEmergencyWithdrawAllowed(bool _newEmergencyWithdrawAllowed) external override onlyOwner {
+    function setEmergencyParameters(bool _newEmergencyWithdrawAllowed, bool _newCanPurgeSnapshots) external override onlyOwner {
         emergencyWithdrawAllowed = _newEmergencyWithdrawAllowed;
+        purgeSnapshots = _newCanPurgeSnapshots;
     }
 
     function setStakingContractAddress(address _newStakingContractAddress) external override onlyOwner {
         stakingContractAddress = _newStakingContractAddress;
-    }
-
-    function setCanPurgeSnapshots(bool _newCanPurgeSnapshots) external override onlyOwner {
-        purgeSnapshots = _newCanPurgeSnapshots;
     }
 
     function setMaxAllowedLeverage(uint8 _newMaxAllowedLeverage) external override onlyOwner {
@@ -450,6 +447,7 @@ contract PlatformV3 is IPlatformV3, Ownable, ERC20, ReentrancyGuard {
         Position storage position = positions[msg.sender];
 
         if (position.positionUnitsAmount > 0) {
+            require(_leverage == position.leverage, "Cannot merge different margin");
             (positionUnitsAmount, locals.marginDebt, locals.positionBalance) = _mergePosition(position, locals.latestSnapshot, locals.cviValue, positionedTokenAmount, _leverage);
             locals.addedTotalLeveragedTokensAmount = totalLeveragedTokensAmount.add(uint256(_tokenAmount - locals.openPositionFee).add(locals.positionBalance).mul(_leverage));
             totalLeveragedTokensAmount = locals.addedTotalLeveragedTokensAmount.sub(locals.marginDebt).sub(locals.positionBalance);
@@ -571,7 +569,7 @@ contract PlatformV3 is IPlatformV3, Ownable, ERC20, ReentrancyGuard {
         }
 
         if (updateData.updatedTurbulenceData) {
-            (latestCVIValue, ) = cviOracle.getCVIRoundData(originalLatestRoundId); 
+            (latestCVIValue, ) = cviOracle.getCVIRoundData(originalLatestRoundId);
             feesCalculator.updateTurbulenceIndicatorPercent(updateData.totalTime, updateData.totalRounds, latestCVIValue, updateData.cviValue);
         }
 

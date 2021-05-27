@@ -9,7 +9,7 @@ interface IFeesCalculatorV4 {
         uint16 cviValue;
     }
 
-    function updateTurbulenceIndicatorPercent(uint256 totalTime, uint256 newRounds, uint16 lastCVIValue, uint16 currCVIValue) external returns (uint16);
+    function updateTurbulenceIndicatorPercent(uint256 totalTime, uint256 newRounds, uint16 lastCVIValue, uint16 currCVIValue) external returns (uint16 updateTurbulenceIndicatorPercent);
 
     function setTurbulenceUpdator(address newUpdator) external;
 
@@ -25,13 +25,13 @@ interface IFeesCalculatorV4 {
     function setBuyingPremiumThreshold(uint16 newBuyingPremiumThreshold) external;
     function setTurbulenceStep(uint16 newTurbulenceStepPercentage) external;
     function setMaxTurbulenceFeePercentToTrim(uint16 newMaxTurbulenceFeePercentToTrim) external;
-    function setTurbulenceDeviationThresholdPercent(uint16 _newTurbulenceDeviationThresholdPercent) external;
-    function setTurbulenceDeviationPercent(uint16 _newTurbulenceDeviationPercentage) external;
+    function setTurbulenceDeviationThresholdPercent(uint16 newTurbulenceDeviationThresholdPercent) external;
+    function setTurbulenceDeviationPercent(uint16 newTurbulenceDeviationPercentage) external;
 
     function calculateTurbulenceIndicatorPercent(uint256 totalHeartbeats, uint256 newRounds, uint16 _lastCVIValue, uint16 _currCVIValue) external view returns (uint16);
 
     function calculateBuyingPremiumFee(uint168 tokenAmount, uint8 leverage, uint256 collateralRatio) external view returns (uint168 buyingPremiumFee, uint16 combinedPremiumFeePercentage);
-    function calculateBuyingPremiumFeeWithTurbulence(uint168 tokenAmount, uint8 leverage, uint256 collateralRatio, uint16 turbulenceIndicatorPercent) external view returns (uint168 buyingPremiumFee, uint16 combinedPremiumFeePercentage);
+    function calculateBuyingPremiumFeeWithTurbulence(uint168 tokenAmount, uint8 leverage, uint256 collateralRatio, uint16 _turbulenceIndicatorPercent) external view returns (uint168 buyingPremiumFee, uint16 combinedPremiumFeePercentage);
     
     function calculateSingleUnitFundingFee(CVIValue[] calldata cviValues) external pure returns (uint256 fundingFee);
     function calculateClosePositionFeePercent(uint256 creationTimestamp) external view returns (uint16);
