@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity 0.7.6;
-pragma experimental ABIEncoderV2;
+pragma abicoder v2;
+
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/math/SafeMath.sol";
@@ -24,8 +25,6 @@ contract FeesCalculatorV4 is IFeesCalculatorV4, Ownable {
     uint256 private constant FUNDING_FEE_CONSTANT_RATE = 3000;
 
     uint256 private constant MAX_FUNDING_FEE_PERCENTAGE = 1000000;
-
-    uint16 private constant MAX_CVI_VALUE = 20000;
     uint16 private constant CVI_DECIMALS = 100;
 
     uint16 private constant MAX_FUNDING_FEE_CVI_THRESHOLD = 55;
@@ -33,6 +32,8 @@ contract FeesCalculatorV4 is IFeesCalculatorV4, Ownable {
     uint16 private constant FUNDING_FEE_DIVISION_FACTOR = 5;
 
     uint16 private constant MAX_PERCENTAGE = 10000;
+
+    uint16 public maxCVIValue = 20000;
 
     uint16 public override depositFeePercent = 0;
     uint16 public override withdrawFeePercent = 0;
@@ -59,6 +60,10 @@ contract FeesCalculatorV4 is IFeesCalculatorV4, Ownable {
     modifier onlyTurbulenceUpdator {
         require(msg.sender == turbulenceUpdator, "Not allowed");
         _;
+    }
+
+    constructor(uint16 _maxCVIValue) {
+        maxCVIValue = _maxCVIValue;
     }
 
     function updateTurbulenceIndicatorPercent(uint256 _totalTime, uint256 _newRounds, uint16 _lastCVIValue, uint16 _currCVIValue) external override onlyTurbulenceUpdator returns (uint16 updatedTurbulenceIndicatorPercent) {
@@ -184,13 +189,13 @@ contract FeesCalculatorV4 is IFeesCalculatorV4, Ownable {
         (buyingPremiumFee, combinedPremiumFeePercentage) = _calculateBuyingPremiumFeeWithTurbulence(_tokenAmount, _leverage, _collateralRatio, _turbulenceIndicatorPercent);
     }
 
-    function calculateSingleUnitFundingFee(CVIValue[] calldata _cviValues) external override pure returns (uint256 fundingFee) {
+    function calculateSingleUnitFundingFee(CVIValue[] calldata _cviValues) external override view returns (uint256 fundingFee) {
         for (uint8 i = 0; i < _cviValues.length; i++) {
             fundingFee = fundingFee.add(calculateSingleUnitPeriodFundingFee(_cviValues[i]));
         }
     }
 
-    function calculateSingleUnitPeriodFundingFee(CVIValue memory _cviValue) private pure returns (uint256 fundingFee) {
+    function calculateSingleUnitPeriodFundingFee(CVIValue memory _cviValue) private view returns (uint256 fundingFee) {
         if (_cviValue.cviValue == 0 || _cviValue.period == 0) {
             return 0;
         }
@@ -220,15 +225,15 @@ contract FeesCalculatorV4 is IFeesCalculatorV4, Ownable {
         }
 
         return PRECISION_DECIMALS.mul(uint256(_cviValue.cviValue)).mul(fundingFeeRatePercents).mul(_cviValue.period) /
-            FUNDING_FEE_BASE_PERIOD / MAX_CVI_VALUE / MAX_FUNDING_FEE_PERCENTAGE;
+            FUNDING_FEE_BASE_PERIOD / maxCVIValue / MAX_FUNDING_FEE_PERCENTAGE;
     }
 
-    function calculateClosePositionFeePercent(uint256 creationTimestamp) external view override returns (uint16) {
-        if (block.timestamp.sub(creationTimestamp) >= closePositionFeeDecayPeriod) {
+    function calculateClosePositionFeePercent(uint256 _creationTimestamp, bool _isNoLockPositionAddress) external view override returns (uint16) {
+        if (block.timestamp.sub(_creationTimestamp) >= closePositionFeeDecayPeriod || _isNoLockPositionAddress) {
             return closePositionFeePercent;
         }
 
-        uint16 decay = uint16(uint256(closePositionMaxFeePercent - closePositionFeePercent).mul(block.timestamp.sub(creationTimestamp)) / 
+        uint16 decay = uint16(uint256(closePositionMaxFeePercent - closePositionFeePercent).mul(block.timestamp.sub(_creationTimestamp)) / 
             closePositionFeeDecayPeriod);
         return closePositionMaxFeePercent.sub(decay);
     }

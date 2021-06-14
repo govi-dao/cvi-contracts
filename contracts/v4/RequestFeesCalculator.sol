@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0
 pragma solidity 0.7.6;
 pragma abicoder v2;
 
@@ -47,7 +48,7 @@ contract RequestFeesCalculator is IRequestFeesCalculator, Ownable {
 		}
 	}
 
-    function calculateTimeDelayFee(uint256 _tokenAmount, uint256 _timeDelay) external view override returns (uint16 feePercentage) {
+    function calculateTimeDelayFee(uint256 _timeDelay) external view override returns (uint16 feePercentage) {
     	require(_timeDelay >= minTimeWindow, "Time delay too small");
     	require(_timeDelay <= maxTimeWindow, "Time delay too big");
 
@@ -106,7 +107,7 @@ contract RequestFeesCalculator is IRequestFeesCalculator, Ownable {
     	findersFeePercent = _findersFeePercent;
     }
 
-    function getMaxFees(uint256 _tokenAmount) external view override returns (uint16 maxFeesPercent) {
+    function getMaxFees() external view override returns (uint16 maxFeesPercent) {
 		return afterTargetMaxTimePenaltyFeePercent;
     }
 }

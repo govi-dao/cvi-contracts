@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity 0.7.6;
-pragma experimental ABIEncoderV2;
+pragma abicoder v2;
 
 interface IFeesCalculatorV4 {
 
@@ -9,7 +9,7 @@ interface IFeesCalculatorV4 {
         uint16 cviValue;
     }
 
-    function updateTurbulenceIndicatorPercent(uint256 totalTime, uint256 newRounds, uint16 lastCVIValue, uint16 currCVIValue) external returns (uint16 updateTurbulenceIndicatorPercent);
+    function updateTurbulenceIndicatorPercent(uint256 totalTime, uint256 newRounds, uint16 lastCVIValue, uint16 currCVIValue) external returns (uint16 _updateTurbulenceIndicatorPercent);
 
     function setTurbulenceUpdator(address newUpdator) external;
 
@@ -33,8 +33,8 @@ interface IFeesCalculatorV4 {
     function calculateBuyingPremiumFee(uint168 tokenAmount, uint8 leverage, uint256 collateralRatio) external view returns (uint168 buyingPremiumFee, uint16 combinedPremiumFeePercentage);
     function calculateBuyingPremiumFeeWithTurbulence(uint168 tokenAmount, uint8 leverage, uint256 collateralRatio, uint16 _turbulenceIndicatorPercent) external view returns (uint168 buyingPremiumFee, uint16 combinedPremiumFeePercentage);
     
-    function calculateSingleUnitFundingFee(CVIValue[] calldata cviValues) external pure returns (uint256 fundingFee);
-    function calculateClosePositionFeePercent(uint256 creationTimestamp) external view returns (uint16);
+    function calculateSingleUnitFundingFee(CVIValue[] calldata cviValues) external view returns (uint256 fundingFee);
+    function calculateClosePositionFeePercent(uint256 creationTimestamp, bool isNoLockPositionAddress) external view returns (uint16);
     function calculateWithdrawFeePercent(uint256 lastDepositTimestamp) external view returns (uint16);
 
     function depositFeePercent() external view returns (uint16);

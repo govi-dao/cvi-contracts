@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity 0.7.6;
-pragma experimental ABIEncoderV2;
 
 import "./IPlatformV3.sol";
 
 interface IPositionRewardsV3 {
 	event Claimed(address indexed account, uint256 rewardAmount);
 
-	function reward(address account, uint256 positionUnits, uint8 leverage) external;
 	function claimReward() external;
 	function calculatePositionReward(uint256 positionUnits, uint256 positionTimestamp) external view returns (uint256 rewardAmount);
 

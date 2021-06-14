@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity 0.7.6;
-pragma experimental ABIEncoderV2;
+pragma abicoder v2;
 
 import "./IVolatilityToken.sol";
 
 interface IRequestFeesCalculator {
     function calculateTimePenaltyFee(IVolatilityToken.Request calldata request) external view returns (uint16 feePercentage);
-    function calculateTimeDelayFee(uint256 tokenAmount, uint256 timeDelay) external view returns (uint16 feePercentage);
+    function calculateTimeDelayFee(uint256 timeDelay) external view returns (uint16 feePercentage);
     function calculateFindersFee(uint256 tokensLeftAmount) external view returns (uint256 findersFeeAmount);
 
     function isLiquidable(IVolatilityToken.Request calldata request) external view returns (bool liquidable);
@@ -17,5 +17,5 @@ interface IRequestFeesCalculator {
     function setTimePenaltyFeeParameters(uint16 beforeTargetTimeMaxPenaltyFeePercent, uint32 afterTargetMidTime, uint16 afterTargetMidTimePenaltyFeePercent, uint32 afterTargetMaxTime, uint16 afterTargetMaxTimePenaltyFeePercent) external;
     function setFindersFee(uint16 findersFeePercent) external;
 
-    function getMaxFees(uint256 tokenAmount) external view returns (uint16 maxFeesPercent);
+    function getMaxFees() external view returns (uint16 maxFeesPercent);
 }

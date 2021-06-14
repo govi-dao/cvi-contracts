@@ -2,13 +2,15 @@
 
 pragma solidity 0.7.6;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/math/SafeMath.sol";
+import "@openzeppelin/contracts-upgradeable/math/SafeMathUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/Initializable.sol";
+
 import "./interfaces/IElasticToken.sol";
 
-contract ElasticToken is IElasticToken, Ownable {
+contract ElasticToken is IElasticToken, OwnableUpgradeable {
 
-    using SafeMath for uint256;
+    using SafeMathUpgradeable for uint256;
 
     uint256 public constant SCALING_FACTOR_DECIMALS = 10**24;
     uint256 public constant DELTA_PRECISION_DECIMALS = 10**18;
@@ -35,12 +37,14 @@ contract ElasticToken is IElasticToken, Ownable {
         _;
     }
 
-    constructor(string memory name_, string memory symbol_, uint8 decimals_) {
+    function __ElasticToken_init(string memory name_, string memory symbol_, uint8 decimals_) public initializer {
+        OwnableUpgradeable.__Ownable_init();
+
         name = name_;
         symbol = symbol_;
         decimals = decimals_;
 
-        scalingFactor = DELTA_PRECISION_DECIMALS;
+        scalingFactor = SCALING_FACTOR_DECIMALS;
     }
 
     function maxScalingFactor() public view override returns (uint256) {
@@ -148,7 +152,7 @@ contract ElasticToken is IElasticToken, Ownable {
     *      Where DeviationFromTargetRate is (MarketOracleRate - targetRate) / targetRate
     *      and targetRate is CpiOracleRate / baseCpi
     */
-    function rebase(uint256 indexDelta, bool positive) public override onlyRebaser returns (uint256) {
+    function rebase(uint256 indexDelta, bool positive) public override onlyRebaser returns (uint256) {        
         if (indexDelta == 0) {
           emit Rebase(block.timestamp, scalingFactor, scalingFactor);
           return totalSupply;

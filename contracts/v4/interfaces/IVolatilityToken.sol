@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity 0.7.6;
-pragma experimental ABIEncoderV2;
 
 import "./IPlatformV3.sol";
 import "./IRequestFeesCalculator.sol";
 import "./../../v3/interfaces/ICVIOracleV3.sol";
 import "./IUniswapOracle.sol";
+import "@uniswap/v2-core/contracts/interfaces/IUniswapV2Pair.sol";
 
 interface IVolatilityToken {
 
@@ -20,7 +20,7 @@ interface IVolatilityToken {
     }
 
     event SubmitRequest(uint256 requestId, uint8 requestType, address indexed account, uint256 tokenAmount, uint256 submitFeesAmount, uint32 targetTimestamp);
-    event FulfillRequest(uint256 requestId, uint256 fullfilFeesAmount);
+    event FulfillRequest(uint256 requestId, uint256 fulfillFeesAmount);
     event Mint(address indexed account, uint256 tokenAmount, uint256 mintedTokens);
     event CollateralizedMint(address indexed account, uint256 tokenAmount, uint256 mintedTokens, uint256 mintedShortTokens);
     event Burn(address indexed account, uint256 tokenAmount, uint256 burnedTokens);
@@ -29,9 +29,8 @@ interface IVolatilityToken {
 
     function submitMintRequest(uint168 tokenAmount, uint32 timeDelay) external returns (uint256 requestId);
     function submitBurnRequest(uint168 tokenAmount, uint32 timeDelay) external returns (uint256 requestId);
-    function submitCollateralizedMintRequest(uint168 tokenAmount, uint32 timeDelay) external returns (uint256 requestId);
 
-    function fulfillMintRequest(uint256 requestId) external returns (uint256 tokensMinted);
+    function fulfillMintRequest(uint256 requestId, uint16 maxBuyingPremiumFeePercentage) external returns (uint256 tokensMinted);
     function fulfillBurnRequest(uint256 requestId) external returns (uint256 tokensBurned);
     function fulfillCollateralizedMintRequest(uint256 requestId) external returns (uint256 tokensMinted, uint256 shortTokensMinted);
 
@@ -42,7 +41,6 @@ interface IVolatilityToken {
     function setFeesCollector(IFeesCollector newCollector) external;
     function setRequestFeesCalculator(IRequestFeesCalculator newRequestFeesCalculator) external;
     function setCVIOracle(ICVIOracleV3 newCVIOracle) external;
-    function setUniswapOracle(IUniswapOracle newUniswapOracle) external;
     function setMinDeviation(uint16 newMinDeviationPercentage) external;
     function setRebaseLag(uint8 newRebaseLag) external;
 }
