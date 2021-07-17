@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.7.6;
+pragma solidity ^0.8;
 
-import "../v1/interfaces/AggregatorV2V3Interface.sol";
+import "../interfaces/AggregatorV2V3Interface.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
 /**
@@ -103,7 +103,7 @@ contract CVIFeedOracle is AggregatorV2V3Interface, Ownable {
 
   function description()
     external
-    view
+    pure
     override
     returns (string memory)
   {

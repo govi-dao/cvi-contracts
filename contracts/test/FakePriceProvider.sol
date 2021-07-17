@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0
-pragma solidity 0.7.6;
+pragma solidity ^0.8;
 
-import "../v1/interfaces/AggregatorV3Interface.sol";
+import "../interfaces/AggregatorV3Interface.sol";
 
 contract FakePriceProvider is AggregatorV3Interface {
     uint256 public price;
@@ -29,9 +29,11 @@ contract FakePriceProvider is AggregatorV3Interface {
         roundIdAnswer = requestedRoundId;
         answer = int(prices[requestedRoundId]);
         answerTimestamp = timestamps[requestedRoundId];
+        startAnswerTimestamp = answerTimestamp;
+        answeredInRound = requestedRoundId;
     }
 
-    function description() external view override returns(string memory) {
+    function description() external pure override returns(string memory) {
         return "Test implementation";
     }
 
@@ -46,13 +48,15 @@ contract FakePriceProvider is AggregatorV3Interface {
         returns (
             uint80 roundIdAnswer,
             int256 answer,
-            uint256,
+            uint256 startedAt,
             uint256 answerTimestamp,
-            uint80
+            uint80 answeredInRound
         )
     {
         answer = int(price);
         roundIdAnswer = roundId;
         answerTimestamp = timestamps[roundId];
+        startedAt = answerTimestamp;
+        answeredInRound = roundId;
     }
 }

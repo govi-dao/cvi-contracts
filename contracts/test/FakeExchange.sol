@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0
-pragma solidity 0.7.6;
+pragma solidity ^0.8;
 
-import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 contract FakeExchange {
 
@@ -46,6 +46,11 @@ contract FakeExchange {
     {
         amounts = new uint[](1);
         amounts[0] = amountIn / exchangeRate;
+    }
+
+    function getAmountsIn(uint amountOut, address[] memory) public view returns (uint[] memory amounts) {
+        amounts = new uint[](1);
+        amounts[0] = amountOut * exchangeRate;
     }
 
     function WETH() external view returns (address) {

@@ -1,11 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0
-pragma solidity 0.7.6;
+pragma solidity ^0.8;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 contract FakeERC20 is ERC20 {
-    constructor(string memory name, string memory symbol, uint256 supply, uint8 decimals) ERC20(name, symbol) {
-        _mint(msg.sender, supply);
-        _setupDecimals(decimals);
+	uint8 __decimals;
+
+    constructor(string memory _name, string memory _symbol, uint256 _supply, uint8 _decimals) ERC20(_name, _symbol) {
+    	__decimals = _decimals;
+        _mint(msg.sender, _supply);
+    }
+
+    function decimals() public view override returns (uint8) {
+        return __decimals;
     }
 }

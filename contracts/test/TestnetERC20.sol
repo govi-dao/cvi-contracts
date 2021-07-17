@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.7.6;
+pragma solidity ^0.8;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
 contract TestnetERC20 is ERC20, Ownable {
+
+    uint8 private __decimals;
 
     mapping(address => bool) public whitelistedAddresses;
 
@@ -17,9 +19,13 @@ contract TestnetERC20 is ERC20, Ownable {
     address public manager;
 
     constructor(string memory _name, string memory _symbol, uint8 _decimals) ERC20(_name, _symbol) {
-        _setupDecimals(_decimals);
+        __decimals = _decimals;
         uint initialDrip = dripSize * 1000 * 10 ** uint(decimals());
         _mint(msg.sender, initialDrip);
+    }
+
+    function decimals() public view override returns (uint8) {
+        return __decimals;
     }
 
     function faucet() public payable {
@@ -50,7 +56,7 @@ contract TestnetERC20 is ERC20, Ownable {
         whitelistedAddresses[_participant] = true;
     }
 
-    function _beforeTokenTransfer(address _from, address _to, uint) internal override {
+    function _beforeTokenTransfer(address _from, address _to, uint) internal view override {
         require(_from == address(0) || whitelistedAddresses[_from] == true || whitelistedAddresses[_to] == true, "Unapproved transfer");
     }
 }
