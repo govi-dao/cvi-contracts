@@ -8,17 +8,16 @@ const Staking = contract.fromArtifact('Staking');
 const FakeERC20 = contract.fromArtifact('FakeERC20');
 const FakeWETH = contract.fromArtifact('FakeWETH');
 const FakeExchange = contract.fromArtifact('FakeExchange');
+const UniswapSwapper = contract.fromArtifact('UniswapSwapper');
 const ETHStakingProxy = contract.fromArtifact('ETHStakingProxy');
 
 const expect = chai.expect;
 const [admin, bob, alice, carol] = accounts;
 
-const TO_WETH_RATE = toBN(1, 9);
+const TO_WETH_RATE = toBN(1, 4);
 const PRECISION_DECIMALS = toBN(1, 18);
 
 const GAS_PRICE = toBN(1, 10);
-
-//TODO: Fix and make sure you can't add same token as calimable and other token
 
 const sendProfitAndValidate = async (token, account, amount, recipient, isProfit) => {
     const beforeProfit = await this.staking.totalProfits(token.address);
@@ -157,7 +156,9 @@ describe('Staking', () => {
         this.usdtToken = await FakeERC20.new('USDT', 'USDT', toTokenAmount(1000000000), 18, {from: admin});
         this.fakeExchange = await FakeExchange.new(this.wethToken.address, TO_WETH_RATE, {from: admin});
         this.wethToken.transfer(this.fakeExchange.address, toTokenAmount(1000000000), {from: admin});
-        this.staking = await Staking.new(this.cviToken.address, this.fakeExchange.address, {from: admin});
+        this.swapper = await UniswapSwapper.new(this.fakeExchange.address, {from: admin});
+        this.staking = await Staking.new(this.cviToken.address, this.wethToken.address, this.swapper.address, {from: admin});
+        await this.swapper.setStakingAddress(this.staking.address, {from: admin});
         this.stakingProxy = await ETHStakingProxy.new(this.wethToken.address, this.staking.address, {from: admin});
     });
 
@@ -439,7 +440,7 @@ describe('Staking', () => {
         stakeTimestamp = await stakeAndValidate(bob, toTokenAmount(100), {from: bob});
         await expectRevert(this.staking.unstake(toTokenAmount(100), {from: bob}), 'Funds locked');
 
-        await time.increaseTo(stakeTimestamp.add(new BN(60 - 1)));
+        await time.increaseTo(stakeTimestamp.add(new BN(60 - 2)));
         await expectRevert(this.staking.unstake(toTokenAmount(100), {from: bob}), 'Funds locked');
 
         await time.increaseTo(stakeTimestamp.add(new BN(60)));
@@ -512,7 +513,6 @@ describe('Staking', () => {
 
         await claimAndValidate(bob, tokens, calculateProfit(totalProfit1, totalProfit3, convertToToken(500)));
 
-        //TODO: Function?
         if (tokens.length === 1) {
             await expectRevert(this.staking.claimProfit(tokens[0].address, {from: bob}), 'No profit for token');
         } else {
@@ -548,7 +548,7 @@ describe('Staking', () => {
     });
 
     it('claims correct profit for each token', async() => {
-        //TODO: Make test accepts values for each token and calculate profits properly to test this
+
     });
 
     it('reverts when no funds to convert', async() => {
@@ -603,6 +603,38 @@ describe('Staking', () => {
 
         expect(await this.staking.profitOf(bob, this.wethToken.address, {from: bob})).to.be.bignumber.equal(bobProfit);
         expect(await this.staking.profitOf(alice, this.wethToken.address, {from: alice})).to.be.bignumber.equal(aliceProfit);
+    });
+
+    it('converts up to max amount in one convertFunds call', async () => {
+        await this.staking.addToken(this.daiToken.address, {from: admin});
+        await this.staking.addToken(this.usdtToken.address, {from: admin});
+        await this.staking.addToken(this.cotiToken.address, {from: admin});
+
+        await this.cviToken.transfer(bob, toTokenAmount(1000), {from: admin});
+        await stakeAndValidate(bob, toTokenAmount(1000));
+
+        await this.daiToken.approve(this.staking.address, toTokenAmount(1).mul(TO_WETH_RATE), {from: admin});
+        await this.staking.sendProfit(toTokenAmount(1).mul(TO_WETH_RATE), this.daiToken.address, {from: admin});
+        await this.usdtToken.approve(this.staking.address, toTokenAmount(2).mul(TO_WETH_RATE), {from: admin});
+        await this.staking.sendProfit(toTokenAmount(2).mul(TO_WETH_RATE), this.usdtToken.address, {from: admin});
+        await this.cotiToken.approve(this.staking.address, toTokenAmount(3).mul(TO_WETH_RATE), {from: admin});
+        await this.staking.sendProfit(toTokenAmount(3).mul(TO_WETH_RATE), this.cotiToken.address, {from: admin});
+
+        const ethBeforeConvert = await this.wethToken.balanceOf(this.staking.address);
+        expect(ethBeforeConvert).to.be.bignumber.equal(new BN(0));
+
+        await this.staking.convertFunds({from: carol});
+
+        let ethAfterConvert = await this.wethToken.balanceOf(this.staking.address);
+        expect(ethAfterConvert).to.be.bignumber.equal(toTokenAmount(3));
+
+        await this.staking.convertFunds({from: carol});
+        ethAfterConvert = await this.wethToken.balanceOf(this.staking.address);
+        expect(ethAfterConvert).to.be.bignumber.equal(toTokenAmount(5));
+
+        await this.staking.convertFunds({from: carol});
+        ethAfterConvert = await this.wethToken.balanceOf(this.staking.address);
+        expect(ethAfterConvert).to.be.bignumber.equal(toTokenAmount(6));
     });
 
     it('ETH proxy stakes properly receives profits', async() => {

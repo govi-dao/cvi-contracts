@@ -3,9 +3,10 @@ const {accounts, contract} = require('@openzeppelin/test-environment');
 const chai = require('chai');
 const expect = chai.expect;
 
-const {deployFullPlatform, deployPlatform, getContracts} = require('./utils/DeployUtils');
-const {createState, depositAndValidate, withdrawAndValidate, openPositionAndValidate, closePositionAndValidate,
-    deposit, withdraw, withdrawLPTokens, openPosition, closePosition, calculateDepositAmounts, calculateWithdrawAmounts} = require('./utils/PlatformUtils.js');
+const {deployFullPlatform, deployPlatform, getContracts, setFeesCalculator, setRewards,
+    setFeesCollector, setLiquidation, setStakingContractAddress} = require('./utils/DeployUtils');
+const {createState, depositAndValidate, withdrawAndValidate, openPositionAndValidate, closePositionAndValidate, liquidateAndValidate,
+    deposit, withdraw, withdrawLPTokens, openPosition, closePosition, calculateDepositAmounts, calculateWithdrawAmounts, calculateLiquidationCVI, calculateLiquidationDays} = require('./utils/PlatformUtils.js');
 const {toBN, toTokenAmount, toCVI} = require('./utils/BNUtils.js');
 const { print } = require('./utils/DebugUtils');
 
@@ -15,13 +16,13 @@ const FakeFeesCollector = contract.fromArtifact('FakeFeesCollector');
 const [admin, bob, alice, carol, dave] = accounts;
 const accountsUsed = [admin, bob, alice, carol];
 
-const OPEN_FEE_PERC = new BN(30);
+const OPEN_FEE_PERC = new BN(15);
+const LP_OPEN_FEE_PERC = new BN(15);
 const DEPOSIT_FEE_PERC = new BN(0);
 const WITHDRAW_FEE_PERC = new BN(0);
 const TURBULENCE_PREMIUM_PERC_STEP = new BN(100);
 const MAX_BUYING_PREMIUM_PERC = new BN(1000);
 const MAX_FEE = new BN(10000);
-const MAX_CVI_VALUE = new BN(20000);
 
 const SECONDS_PER_DAY = new BN(60 * 60 * 24);
 
@@ -29,6 +30,8 @@ const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
 const SECOND_INITIAL_RATE = toBN(1, 18);
 const SECOND_ETH_INITIAL_RATE = toBN(1, 10);
+
+const MARGINS_TO_TEST = [1, 2, 3, 4, 5, 6, 7, 8];
 
 const leftTokensToWithdraw = async account => {
     const totalSupply = await this.platform.totalSupply();
@@ -41,7 +44,17 @@ const leftTokensToWithdraw = async account => {
     return leftTokens;
 };
 
-const testMultipleAccountsDepositWithdraw = async (depositFee, withdrawFee, testEndBalance = true) => {
+const increaseSharedPool = async (account, amount) => {
+    if (this.isETH) {
+        await this.platform.increaseSharedPoolETH({from: account, value: amount});
+    } else {
+        await this.token.transfer(account, amount, {from: admin});
+        await this.token.approve(this.platform.address, amount, {from: account});
+        await this.platform.increaseSharedPool(amount, {from: account});
+    }
+};
+
+const testMultipleAccountsDepositWithdraw = async (depositFee, withdrawFee, testEndBalance = true, addLiquidity = false) => {
     await this.feesCalculator.setDepositFee(depositFee, {from: admin});
     await this.feesCalculator.setWithdrawFee(withdrawFee, {from: admin});
 
@@ -49,12 +62,20 @@ const testMultipleAccountsDepositWithdraw = async (depositFee, withdrawFee, test
     await depositAndValidate(this.state, 1000, alice);
 
     await time.increase(3 * 24 * 60 * 60);
+    await this.fakePriceProvider.setPrice(toCVI(5000));
 
     await withdrawAndValidate(this.state, 1000, bob);
     await depositAndValidate(this.state, 3000, carol);
+
+    if (addLiquidity) {
+        await increaseSharedPool(dave, 5000);
+        this.state.sharedPool = this.state.sharedPool.add(new BN(5000));
+    }
+
     await withdrawAndValidate(this.state, 500, alice);
 
     await time.increase(3 * 24 * 60 * 60);
+    await this.fakePriceProvider.setPrice(toCVI(5000));
 
     if (depositFee.toNumber() === 0 && withdrawFee.toNumber() === 0) {
         await withdrawAndValidate(this.state, 500, alice);
@@ -76,7 +97,7 @@ const testMultipleAccountsDepositWithdraw = async (depositFee, withdrawFee, test
 const calculationsForBuyingPremium = async(cviValue, openTokenAmount, previousPositionUnits) => {
     let currTurbulence = await this.feesCalculator.turbulenceIndicatorPercent();
     let openPositionFee = openTokenAmount.mul(OPEN_FEE_PERC).div(MAX_FEE);
-    let positionUnitsAmountWithoutPremium = (openTokenAmount.sub(openPositionFee)).div(cviValue).mul(MAX_CVI_VALUE);
+    let positionUnitsAmountWithoutPremium = (openTokenAmount.sub(openPositionFee)).div(cviValue).mul(getContracts().maxCVIValue);
     let minPositionUnitsAmount = positionUnitsAmountWithoutPremium.mul(new BN(90)).div(new BN(100));
     let totalPositionUnitsAmount =  await this.platform.totalPositionUnitsAmount();
 
@@ -90,7 +111,7 @@ const calculationsForBuyingPremium = async(cviValue, openTokenAmount, previousPo
         combineedBuyingPremiumPercent = MAX_BUYING_PREMIUM_PERC;
     }
 
-    let currPositionUnits = openTokenAmount.mul(MAX_FEE.sub(OPEN_FEE_PERC).sub(combineedBuyingPremiumPercent)).div(MAX_FEE).mul(MAX_CVI_VALUE).div(cviValue);
+    let currPositionUnits = openTokenAmount.mul(MAX_FEE.sub(OPEN_FEE_PERC).sub(combineedBuyingPremiumPercent)).div(MAX_FEE).mul(getContracts().maxCVIValue).div(cviValue);
     let combinedPositionUnits = currPositionUnits.add(previousPositionUnits);
 
     return [combinedPositionUnits, combineedBuyingPremiumPercent, collateralRatio, minPositionUnitsAmount];
@@ -146,11 +167,33 @@ const setPlatformTests = isETH => {
     }
 
     if (isETH) {
-        it('reverts when calling deposit and openPosition instead of depositETH and openPositionETH', async() => {
-            await expectRevert(this.platform.deposit(toBN(1000, 18), new BN(0)), 'Use depositETH');
-            await expectRevert(this.platform.openPosition(toBN(1000, 18), MAX_CVI_VALUE, MAX_FEE, new BN(1)), 'Use openPositionETH');
+        it('reverts when calling deposit instead of depositETH', async() => {
+            await expectRevert.unspecified(this.platform.deposit(toBN(1000, 18), new BN(0)));
+        });
+
+        it('reverts when calling openPosition instead of openPositionETH', async() => {
+            await expectRevert.unspecified(this.platform.openPosition(toBN(1000, 18), getContracts().maxCVIValue, MAX_FEE, new BN(1)));
+        });
+
+        it('reverts when calling increaseSharedPool instead of increaseSharedPoolETH', async() => {
+            await expectRevert.unspecified(this.platform.increaseSharedPool(toBN(1000, 18)));
         });
     }
+
+    it('reverts when calling deposit too long after latest cvi oracle', async() => {
+        await time.increase(5 * SECONDS_PER_DAY);
+        await expectRevert(depositAndValidate(this.state, 1000, bob), 'Latest cvi too long ago');
+        await this.fakePriceProvider.setPrice(toCVI(5000));
+        await depositAndValidate(this.state, 1000, bob);
+    });
+
+    it('reverts when calling open too long after latest cvi oracle', async() => {
+        await depositAndValidate(this.state, 5000, bob);
+        await time.increase(5 * SECONDS_PER_DAY);
+        await expectRevert(openPositionAndValidate(this.state, 1000, alice), 'Latest cvi too long ago');
+        await this.fakePriceProvider.setPrice(toCVI(5000));
+        await openPositionAndValidate(this.state, 1000, alice);
+    });
 
     it('deposits liquidity correctly', async () => {
         await depositAndValidate(this.state, 5000, bob);
@@ -221,6 +264,7 @@ const setPlatformTests = isETH => {
     it('handles multiple accounts deposit and withdraw correctly with a different initial rate', async () => {
         await deployPlatform(this.isETH, SECOND_INITIAL_RATE, SECOND_ETH_INITIAL_RATE);
         this.platform = getContracts().platform;
+        this.feesCalculator.setTurbulenceUpdator(this.platform.address, {from: admin});
 
         await testMultipleAccountsDepositWithdraw(DEPOSIT_FEE_PERC, WITHDRAW_FEE_PERC);
     });
@@ -239,6 +283,26 @@ const setPlatformTests = isETH => {
 
     it('handles multiple accounts deposit and withdraw correctly with withdraw fee only', async () => {
         await testMultipleAccountsDepositWithdraw(new BN(0), WITHDRAW_FEE_PERC);
+    });
+
+    it('handles increasing shared pool correctly', async () => {
+        await this.platform.setAddressSpecificParameters(dave, true, false, true, {from: admin});
+        await testMultipleAccountsDepositWithdraw(DEPOSIT_FEE_PERC, WITHDRAW_FEE_PERC, false, true);
+    });
+
+    it('reverts when trying to increase shared pool without permission', async () => {
+        await expectRevert.unspecified(increaseSharedPool(bob, 1000)); // 'Not allowed'
+        await expectRevert.unspecified(increaseSharedPool(alice, 1000)); // 'Not allowed'
+
+        await this.platform.setAddressSpecificParameters(alice, true, false, true, {from: admin});
+
+        await expectRevert.unspecified(increaseSharedPool(bob, 1000)); // 'Not allowed'
+        await increaseSharedPool(alice, 1000);
+
+        await this.platform.setAddressSpecificParameters(alice, true, false, false, {from: admin});
+
+        await expectRevert.unspecified(increaseSharedPool(bob, 1000)); // 'Not allowed'
+        await expectRevert.unspecified(increaseSharedPool(alice, 1000)); // 'Not allowed'
     });
 
     it('prevents bypassing lock by passing token to antoher address', async () => {
@@ -261,7 +325,7 @@ const setPlatformTests = isETH => {
         await withdraw(new BN(1), toTokenAmount(1000000), alice);
     });
 
-    it('lock time is not passed when staking/unstaking to staking contract address specified', async () => {
+    it('lock time is not passed when staking/unstaking to staking contract address specified, and sets current time on withdraw', async () => {
         if (!this.isETH) {
             await this.token.transfer(bob, 2000, {from: admin});
             await this.token.approve(this.platform.address, 2000, {from: bob});
@@ -302,7 +366,7 @@ const setPlatformTests = isETH => {
         await staking.withdraw(lpTokensNum, {from: bob});
         expect(await this.platform.lastDepositTimestamp(bob)).to.be.bignumber.equal(timestamp2);
 
-        await this.platform.setStakingContractAddress(staking.address, {from: admin});
+        await setStakingContractAddress(staking.address, {from: admin});
         await time.increase(60);
 
         await deposit(1000, 0, bob);
@@ -320,9 +384,10 @@ const setPlatformTests = isETH => {
         await time.increase(60);
 
         await staking.withdraw(lpTokensNum3, {from: bob});
+        const withdrawTimestamp = await time.latest();
 
         expect(await this.platform.lastDepositTimestamp(staking.address)).to.be.bignumber.equal(timestamp2);
-        expect(await this.platform.lastDepositTimestamp(bob)).to.be.bignumber.equal(timestamp3);
+        expect(await this.platform.lastDepositTimestamp(bob)).to.be.bignumber.equal(withdrawTimestamp);
     });
 
     it('prevents transfer of locked tokens if recipient sets so', async () => {
@@ -338,6 +403,7 @@ const setPlatformTests = isETH => {
         }
 
         await time.increaseTo(timestamp.add(new BN(2 * SECONDS_PER_DAY)));
+        await this.fakePriceProvider.setPrice(toCVI(5000));
 
         expect(await this.platform.revertLockedTransfered(bob)).to.be.false;
         expect(await this.platform.revertLockedTransfered(alice)).to.be.false;
@@ -390,13 +456,13 @@ const setPlatformTests = isETH => {
     });
 
     it('allows complete shutdown of all operations by setters', async () => {
-        await this.platform.setFeesCalculator(ZERO_ADDRESS, {from: admin});
+        await setFeesCalculator(ZERO_ADDRESS, {from: admin});
 
         await expectRevert(depositAndValidate(this.state, 5000, bob), 'revert');
 
-        await this.platform.setFeesCalculator(this.feesCalculator.address, {from: admin});
+        await setFeesCalculator(this.feesCalculator.address, {from: admin});
         await depositAndValidate(this.state, 5000, bob);
-        await this.platform.setFeesCalculator(ZERO_ADDRESS, {from: admin});
+        await setFeesCalculator(ZERO_ADDRESS, {from: admin});
 
         await time.increase(3 * 24 * 60 * 60);
 
@@ -407,19 +473,19 @@ const setPlatformTests = isETH => {
 
         await expectRevert(openPositionAndValidate(this.state, 1000, alice), 'revert');
 
-        await this.platform.setFeesCalculator(this.feesCalculator.address, {from: admin});
+        await setFeesCalculator(this.feesCalculator.address, {from: admin});
         await openPositionAndValidate(this.state, 1000, alice);
 
         await time.increase(24 * 60 * 60);
 
-        await this.platform.setFeesCalculator(ZERO_ADDRESS, {from: admin});
+        await setFeesCalculator(ZERO_ADDRESS, {from: admin});
         await expectRevert(closePosition(1000, 5000, alice), 'revert');
 
-        await this.platform.setLiquidation(ZERO_ADDRESS, {from: admin});
+        await setLiquidation(ZERO_ADDRESS, {from: admin});
         await expectRevert(this.platform.liquidatePositions([bob], {from: carol}), 'revert');
 
-        await this.platform.setFeesCalculator(this.feesCalculator.address, {from: admin});
-        await this.platform.setLiquidation(this.liquidation.address, {from: admin});
+        await setFeesCalculator(this.feesCalculator.address, {from: admin});
+        await setLiquidation(this.liquidation.address, {from: admin});
 
         await expectRevert(this.platform.liquidatePositions([bob], {from: carol}), 'No liquidatable position');
     });
@@ -430,7 +496,7 @@ const setPlatformTests = isETH => {
 
     it('reverts when opening a position with a bad max CVI value', async () => {
         await expectRevert(openPosition(5000, 0, alice), 'Bad max CVI value');
-        await expectRevert(openPosition(5000, 20001, alice), 'Bad max CVI value');
+        await expectRevert(openPosition(5000, getContracts().maxCVIValue.toNumber() + 1, alice), 'Bad max CVI value');
     });
 
     it('reverts when opening a position with CVI value higher than max CVI', async () => {
@@ -450,6 +516,66 @@ const setPlatformTests = isETH => {
         await expectRevert(openPosition(5000, 5999, alice), 'CVI too high');
     });
 
+    it('calculates funding fees properly for different cvi values', async () => {
+        await depositAndValidate(this.state, 100000, bob);
+
+        const cviValues = [50, 50, 55, 75, 100, 125, 150, 180, 200];
+        for (let cvi of cviValues) {
+            await time.increase(3 * SECONDS_PER_DAY);
+            await this.fakePriceProvider.setPrice(toCVI(cvi * 100));
+            const {positionUnits} = await openPositionAndValidate(this.state, 1000, alice);
+            await time.increase(3 * SECONDS_PER_DAY);
+            await this.fakePriceProvider.setPrice(toCVI(cvi * 100));
+            await closePositionAndValidate(this.state, positionUnits, alice);
+            await time.increase(3 * SECONDS_PER_DAY);
+        }
+    });
+
+    it('calcalates time turbulence with not enough deviation properly', async () => {
+        await depositAndValidate(this.state, 40000, bob);
+
+        // Cause turbulence
+        await time.increase(1);
+        await this.fakePriceProvider.setPrice(toCVI(5000));
+        await time.increase(1);
+        await this.fakePriceProvider.setPrice(toCVI(5005));
+        await time.increase(1);
+        await this.fakePriceProvider.setPrice(toCVI(5010));
+        await time.increase(1);
+
+        await openPositionAndValidate(this.state, 1000, alice);
+    });
+
+    it('calcalates time turbulence with more than enough deviation properly', async () => {
+        await depositAndValidate(this.state, 40000, bob);
+
+        // Cause turbulence
+        await time.increase(1);
+        await this.fakePriceProvider.setPrice(toCVI(5000));
+        await time.increase(1);
+        await this.fakePriceProvider.setPrice(toCVI(6000));
+        await time.increase(1);
+        await this.fakePriceProvider.setPrice(toCVI(7000));
+        await time.increase(1);
+
+        await openPositionAndValidate(this.state, 1000, alice);
+    });
+
+    it('calcalates time turbulence with nearly enough deviation properly', async () => {
+        await depositAndValidate(this.state, 40000, bob);
+
+        // Cause turbulence
+        await time.increase(1);
+        await this.fakePriceProvider.setPrice(toCVI(5000));
+        await time.increase(1);
+        await this.fakePriceProvider.setPrice(toCVI(5300));
+        await time.increase(1);
+        await this.fakePriceProvider.setPrice(toCVI(5400));
+        await time.increase(1);
+
+        await openPositionAndValidate(this.state, 1000, alice);
+    });
+
     it('reverts when opening a position with buying premium percentage higher than max', async () => {
         await depositAndValidate(this.state, 40000, bob);
 
@@ -462,9 +588,9 @@ const setPlatformTests = isETH => {
         await time.increase(1);
         await this.fakePriceProvider.setPrice(toCVI(5000));
         await time.increase(1);
-        await this.fakePriceProvider.setPrice(toCVI(5000));
+        await this.fakePriceProvider.setPrice(toCVI(6000));
         await time.increase(1);
-        await this.fakePriceProvider.setPrice(toCVI(5000));
+        await this.fakePriceProvider.setPrice(toCVI(7000));
         await time.increase(1);
 
         // Used to update snapshots
@@ -472,24 +598,55 @@ const setPlatformTests = isETH => {
 
         const turbulenceIndicatorPercent = TURBULENCE_PREMIUM_PERC_STEP.mul(new BN(3));
 
-        await expectRevert(openPosition(5000, 5000, alice, turbulenceIndicatorPercent.sub(new BN(1))), 'Premium fee too high');
-        await openPosition(5000, 5000, alice, turbulenceIndicatorPercent);
+        await expectRevert(openPosition(5000, 7000, alice, turbulenceIndicatorPercent.add(LP_OPEN_FEE_PERC).sub(new BN(1))), 'Premium fee too high');
+        await openPosition(5000, 7000, alice, turbulenceIndicatorPercent.add(LP_OPEN_FEE_PERC));
+    });
+
+    it('opens a position with no premium fee properly', async () => {
+        await depositAndValidate(this.state, 40000, bob);
+
+        // Cause turbulence
+        await time.increase(1);
+        await this.fakePriceProvider.setPrice(toCVI(5000));
+        await time.increase(1);
+        await this.fakePriceProvider.setPrice(toCVI(5300));
+        await time.increase(1);
+        await this.fakePriceProvider.setPrice(toCVI(5400));
+        await time.increase(1);
+
+        await this.platform.setAddressSpecificParameters(alice, true, true, false, {from: admin});
+        await openPositionAndValidate(this.state, 1000, alice, true, true);
+    });
+
+    it('reverts when trying to open a position with no premium fee without privilage', async () => {
+        await depositAndValidate(this.state, 40000, bob);
+
+        await expectRevert.unspecified(openPositionAndValidate(this.state, 1000, bob, true, true));
+        await expectRevert.unspecified(openPositionAndValidate(this.state, 1000, alice, true, true));
+
+        await this.platform.setAddressSpecificParameters(alice, true, true, false, {from: admin});
+
+        await expectRevert.unspecified(openPositionAndValidate(this.state, 1000, bob, true, true));
+        await openPositionAndValidate(this.state, 1000, alice, true, true);
+
+        await this.platform.setAddressSpecificParameters(alice, true, false, false, {from: admin});
+
+        await expectRevert.unspecified(openPositionAndValidate(this.state, 1000, bob, true, true));
+        await expectRevert.unspecified(openPositionAndValidate(this.state, 1000, alice, true, true));
     });
 
     if (!isETH) {
         it('reverts when opening a position with too high position units', async () => {
-            const overflowReason = this.isETH ? 'SafeMath: subtraction overflow': 'Too much position units';
-            await expectRevert(openPosition(toBN(374, 48), 5000, alice), overflowReason);
-            await expectRevert(openPosition(toBN(94, 48), 5000, alice), overflowReason);
+            await expectRevert.unspecified(openPosition(toBN(374, 48), 5000, alice));
+            await expectRevert.unspecified(openPosition(toBN(94, 48), 5000, alice));
         });
 
         it('reverts when merging a position with too high position units', async () => {
-            await depositAndValidate(this.state, 4000, bob);
+            await depositAndValidate(this.state, 5000, bob);
             await openPositionAndValidate(this.state, 1000, alice);
 
-            const overflowReason = this.isETH ? 'SafeMath: subtraction overflow': 'Too much position units';
-            await expectRevert(openPosition(toBN(374, 48).sub(new BN(1000).div(new BN(4))), 5000, alice), overflowReason);
-            await expectRevert(openPosition(toBN(120, 48).sub(new BN(1000).div(new BN(4))), 5000, alice), overflowReason);
+            await expectRevert.unspecified(openPosition(toBN(374, 48).sub(new BN(1000).div(new BN(4))), 5000, alice));
+            await expectRevert.unspecified(openPosition(toBN(120, 48).sub(new BN(1000).div(new BN(4))), 5000, alice));
         });
     }
 
@@ -500,32 +657,28 @@ const setPlatformTests = isETH => {
         await this.token.transfer(alice, toTokenAmount(50000), {from: admin});
         await this.token.approve(this.platform.address, toTokenAmount(50000), {from: alice});
 
-        /*
-        await expectRevert(this.platform.openPosition(toTokenAmount(1000), 5000, {from: alice}), 'Not enough liquidity');
-        await depositAndValidate(this.state, toTokenAmount(3000), bob);
-        await expectRevert(this.platform.openPosition(toTokenAmount(1000), 5000, {from: alice}), 'Not enough liquidity');
-        await depositAndValidate(this.state, toTokenAmount(10), bob);
-
-        await this.platform.openPosition(toTokenAmount(1000), 5000, {from: alice});*/
     });
 
     it('reaches low enough gas values for deposit/withdraw actions', async () => {
         await this.fakePriceProvider.setPrice(toCVI(5000));
         await time.increase(24 * 60);
+        await this.fakePriceProvider.setPrice(toCVI(5000));
+
         print('first deposit ever');
         await depositAndValidate(this.state, 4000, bob);
 
         await time.increase(24 * 60);
         await this.fakePriceProvider.setPrice(toCVI(6000));
         await time.increase(24 * 60);
+        await this.fakePriceProvider.setPrice(toCVI(6000));
 
         print('second deposit');
         await depositAndValidate(this.state, 2000, bob);
 
         await time.increase(24 * 60);
         await this.fakePriceProvider.setPrice(toCVI(7000));
-
         await time.increase(3 * 24 * 60 * 60);
+        await this.fakePriceProvider.setPrice(toCVI(7000));
 
         print('partial withdraw');
         await withdrawAndValidate(this.state, 2000, bob);
@@ -533,6 +686,7 @@ const setPlatformTests = isETH => {
         await time.increase(24 * 60);
         await this.fakePriceProvider.setPrice(toCVI(8000));
         await time.increase(24 * 60);
+        await this.fakePriceProvider.setPrice(toCVI(8000));
 
         print('full withdraw');
         await withdrawAndValidate(this.state, 4000, bob);
@@ -542,6 +696,7 @@ const setPlatformTests = isETH => {
         await this.fakePriceProvider.setPrice(toCVI(5000));
         print('first deposit ever');
         await time.increase(24 * 60 * 60);
+        await this.fakePriceProvider.setPrice(toCVI(5000));
         await depositAndValidate(this.state, 40000, bob);
 
         await time.increase(24 * 60);
@@ -566,20 +721,25 @@ const setPlatformTests = isETH => {
 
         print('partial close');
         await time.increase(3 * 24 * 60 * 60);
+        await this.fakePriceProvider.setPrice(toCVI(8000));
         await closePositionAndValidate(this.state, positionUnits.div(new BN(2)), alice);
         positionUnits = positionUnits.sub(positionUnits.div(new BN(2)));
         print('entire close');
         await time.increase(24 * 60 * 60);
+        await this.fakePriceProvider.setPrice(toCVI(8000));
         await closePositionAndValidate(this.state, positionUnits, alice);
 
         print('partial withdraw');
         await time.increase(3 * 24 * 60 * 60);
+        await this.fakePriceProvider.setPrice(toCVI(8000));
         await withdrawAndValidate(this.state, 10000, bob);
         print('second deposit');
         await time.increase(24 * 60 * 60);
+        await this.fakePriceProvider.setPrice(toCVI(8000));
         await depositAndValidate(this.state, 10000, bob);
         print('full withdraw');
         await time.increase(3 * 24 * 60 * 60);
+        await this.fakePriceProvider.setPrice(toCVI(8000));
 
         const tokensLeft = this.isETH ? await balance.current(this.platform.address, 'wei') :
             await this.token.balanceOf(this.platform.address);
@@ -589,19 +749,203 @@ const setPlatformTests = isETH => {
     it('opens a position properly', async () => {
         await this.fakePriceProvider.setPrice(toCVI(5000));
         await time.increase(24 * 24 * 60);
-        await depositAndValidate(this.state, 20000, bob);
+        await this.fakePriceProvider.setPrice(toCVI(5000));
+        await depositAndValidate(this.state, 30000, bob);
         await time.increase(24 * 24 * 60);
+        await this.fakePriceProvider.setPrice(toCVI(5000));
         await openPositionAndValidate(this.state, 5000, alice);
     });
 
+    for (let margin of MARGINS_TO_TEST) {
+        it(`opens a margined position properly with premium fee (margin = ${margin})`, async () => {
+            await this.fakePriceProvider.setPrice(toCVI(11000));
+            console.log('deposit: ',  5000 * margin - 5000 * (margin - 1));
+            await depositAndValidate(this.state, 5000 * margin * 2 - 5000 * (margin - 1) - 5000, bob);
+            await openPositionAndValidate(this.state, 5000, alice, true, false, margin);
+        });
+    }
+
+    for (let margin of MARGINS_TO_TEST) {
+        it(`opens a margined position properly without premium fee (margin = ${margin})`, async () => {
+            await this.fakePriceProvider.setPrice(toCVI(11000));
+            console.log('deposit: ',  (5000 * margin - 5000 * (margin - 1)) * 2);
+            await depositAndValidate(this.state, (5000 * margin * 2 - 5000 * (margin - 1) - 5000) * 2, bob);
+            await openPositionAndValidate(this.state, 5000, alice, true, false, margin);
+        });
+    }
+
+    for (let margin of MARGINS_TO_TEST) {
+        it(`merges a margined position properly with premium fee (margin = ${margin})`, async () => {
+            await this.fakePriceProvider.setPrice(toCVI(11000));
+            console.log('deposit: ',  (5000 * margin - 5000 * (margin - 1)) * 2);
+            await depositAndValidate(this.state, (5000 * margin * 2 - 5000 * (margin - 1) - 5000) * 2, bob);
+            await openPositionAndValidate(this.state, 5000, alice, true, false, margin);
+            await time.increase(SECONDS_PER_DAY);
+            await this.fakePriceProvider.setPrice(toCVI(12000));
+            await openPositionAndValidate(this.state, 2500, alice, true, false, margin);
+            await time.increase(SECONDS_PER_DAY);
+            await this.fakePriceProvider.setPrice(toCVI(11000));
+            await openPositionAndValidate(this.state, 2000, alice, true, false, margin);
+            await time.increase(SECONDS_PER_DAY);
+            await this.fakePriceProvider.setPrice(toCVI(13000));
+            await openPositionAndValidate(this.state, 500, alice, true, false, margin);
+        });
+    }
+
+    for (let margin of MARGINS_TO_TEST) {
+        it(`closes a margined position properly, cvi rises (margin = ${margin})`, async () => {
+            await this.fakePriceProvider.setPrice(toCVI(11000));
+            await depositAndValidate(this.state, (5000 * margin * 2 - 5000 * (margin - 1) - 5000) * 2, bob);
+            const {positionUnits} = await openPositionAndValidate(this.state, 5000, alice, true, false, margin);
+            await time.increase(SECONDS_PER_DAY);
+            await this.fakePriceProvider.setPrice(toCVI(13000));
+            await closePositionAndValidate(this.state, positionUnits, alice);
+        });
+    }
+
+    for (let margin of MARGINS_TO_TEST) {
+        it(`closes a margined position properly, cvi rises (margin = ${margin})`, async () => {
+            await this.fakePriceProvider.setPrice(toCVI(11000));
+            await depositAndValidate(this.state, (5000 * margin * 2 - 5000 * (margin - 1) - 5000) * 2, bob);
+            const {positionUnits} = await openPositionAndValidate(this.state, 5000, alice, true, false, margin);
+            await time.increase(SECONDS_PER_DAY);
+            await this.fakePriceProvider.setPrice(toCVI(13000));
+            await closePositionAndValidate(this.state, positionUnits, alice);
+        });
+    }
+
+    for (let margin of MARGINS_TO_TEST) {
+        it(`closes a margined position properly, cvi drops (margin = ${margin})`, async () => {
+            await this.fakePriceProvider.setPrice(toCVI(11000));
+            await depositAndValidate(this.state, (5000 * margin * 2 - 5000 * (margin - 1) - 5000) * 2, bob);
+            const {positionUnits} = await openPositionAndValidate(this.state, 5000, alice, true, false, margin);
+            await time.increase(SECONDS_PER_DAY);
+            await this.fakePriceProvider.setPrice(toCVI(10000));
+            await closePositionAndValidate(this.state, positionUnits, alice);
+        });
+    }
+
+    const printCollateral = async () => {
+        //console.log('collateral 1', this.state.totalPositionUnits.mul(toBN(1, 10)).div(this.state.sharedPool).toString());
+        //console.log('total positions', (await this.platform.totalPositionUnitsAmount()).toString());
+        //console.log('total leveraged', (await this.platform.totalLeveragedTokensAmount()).toString());
+        //console.log('collateral', (await this.platform.totalPositionUnitsAmount()).mul(toBN(1, 10)).div(await this.platform.totalLeveragedTokensAmount()).toString());
+    };
+
+    it('opens multiple margined positioned together with different margins, including premium fee', async () => {
+        await this.fakePriceProvider.setPrice(toCVI(11000));
+        await depositAndValidate(this.state, 100000, bob);
+        await openPositionAndValidate(this.state, 5000, alice, true, false, 1);
+        await printCollateral();
+        await openPositionAndValidate(this.state, 15000, dave, true, false, 8);
+        await printCollateral();
+        await openPositionAndValidate(this.state, 15000, carol, true, false, 4);
+        await printCollateral();
+    });
+
+    it.skip('opens and closes margined positions', async () => {
+
+    });
+
+    it.skip('liquidates an (also) margined position properly', async () => {
+
+    });
+
+    it.skip('opens and closes margined positions including liquidation and premium fee', async () => {
+
+    });
+
+    it.skip('merges a margined position properly', async () => {
+
+    });
+
+    it.skip('calculates premium fee correctly by collateral ratio', async () => {
+
+    });
+
+    it.skip('calculates premium fee correctly by collateral ratio in margined positions', async () => {
+
+    });
+
+    for (let margin of MARGINS_TO_TEST) {
+        it(`liquidates position due to cvi drop (margin = ${margin})`, async () => {
+            await this.fakePriceProvider.setPrice(toCVI(10000));
+            await depositAndValidate(this.state, 50000, bob);
+            await openPositionAndValidate(this.state, 1000, alice, true, false, margin);
+
+            const liquidationCVI = await calculateLiquidationCVI(this.state, alice);
+
+            await this.fakePriceProvider.setPrice(toCVI(liquidationCVI));
+            await liquidateAndValidate(this.state, alice, carol, true);
+        });
+    }
+
+    for (let margin of MARGINS_TO_TEST) {
+        it(`does not liquidates position due to nearly enough cvi drop (margin = ${margin})`, async () => {
+            await this.fakePriceProvider.setPrice(toCVI(10000));
+            await depositAndValidate(this.state, 50000, bob);
+            await openPositionAndValidate(this.state, 1000, alice, true, false, margin);
+
+            const liquidationCVI = (await calculateLiquidationCVI(this.state, alice)).add(new BN(100));
+
+            await this.fakePriceProvider.setPrice(toCVI(liquidationCVI));
+            await liquidateAndValidate(this.state, alice, carol, false);
+        });
+    }
+
+    for (let margin of [1]) {
+        it(`liquidates position due to funding fees (margin = ${margin})`, async () => {
+            await this.fakePriceProvider.setPrice(toCVI(10000));
+            await depositAndValidate(this.state, toTokenAmount(50000), bob);
+            await openPositionAndValidate(this.state, toTokenAmount(1000), alice, true, false, margin);
+
+            const daysToLiquidation = await calculateLiquidationDays(this.state, alice, 10000);
+
+            await time.increase(daysToLiquidation.sub(new BN(1)).mul(new BN(3600 * 24)));
+
+            await this.fakePriceProvider.setPrice(toCVI(10000));
+            await liquidateAndValidate(this.state, alice, carol, false);
+
+            await time.increase(new BN(3600 * 24));
+            await this.fakePriceProvider.setPrice(toCVI(10000));
+            await liquidateAndValidate(this.state, alice, carol, true);
+        });
+    }
+
+    it('LPs dont lose from margin debt calculation', async () => {
+        await this.fakePriceProvider.setPrice(toCVI(5000));
+        await depositAndValidate(this.state, 5000 * 2 * 2, bob);
+        await depositAndValidate(this.state, 5000 * 2 * 2, dave);
+        await openPositionAndValidate(this.state, 5000, alice, 2);
+        await withdrawAndValidate(this.state, 5000 * 2 * 2, bob);
+        await withdrawAndValidate(this.state, 5000 * 2 * 2, dave);
+    });
+
+    it('opens multiple positions and closes them, but gets reward correctly on last open and merge afterwards', async () => {
+        await depositAndValidate(this.state, 60000, bob);
+        const {positionUnits: positionUnits1} = await openPositionAndValidate(this.state, 5000, alice);
+        await time.increase(SECONDS_PER_DAY * 2);
+        await this.fakePriceProvider.setPrice(toCVI(5000));
+        await closePositionAndValidate(this.state, positionUnits1, alice);
+        const {positionUnits: positionUnits2} = await openPositionAndValidate(this.state, 4000, alice);
+        await time.increase(SECONDS_PER_DAY * 2);
+        await this.fakePriceProvider.setPrice(toCVI(5000));
+        await closePositionAndValidate(this.state, positionUnits2, alice);
+
+        await openPositionAndValidate(this.state, 3000, alice);
+        await openPositionAndValidate(this.state, 1000, alice);
+    });
+
     it('opens a position properly with no rewards', async () => {
-        await this.platform.setRewards(ZERO_ADDRESS, {from: admin});
+        await setRewards(ZERO_ADDRESS, {from: admin});
 
         await this.fakePriceProvider.setPrice(toCVI(5000));
         await time.increase(24 * 24 * 60);
-        await depositAndValidate(this.state, 20000, bob);
+        await this.fakePriceProvider.setPrice(toCVI(5000));
+        await depositAndValidate(this.state, 30000, bob);
         await time.increase(24 * 24 * 60);
-        await openPositionAndValidate(this.state, 5000, alice);
+        await this.fakePriceProvider.setPrice(toCVI(5000));
+        await openPositionAndValidate(this.state, 5000, alice, false);
     });
 
     it('merges a position properly', async () => {
@@ -621,14 +965,22 @@ const setPlatformTests = isETH => {
         await this.fakePriceProvider.setPrice(toCVI(8000));
 
         await openPositionAndValidate(this.state, 1000, alice);
+    });
 
+    it('cvi oracle truncates to max value', async () => {
+        const cvi = getContracts().maxCVIValue.toNumber() + 1;
+        await this.fakePriceProvider.setPrice(toCVI(cvi));
+
+        expect((await this.fakeOracle.getCVILatestRoundData()).cviValue).to.be.bignumber.equal(getContracts().maxCVIValue);
+        //expect((await getContracts().fakeOracleV2.getCVILatestRoundData()).cviValue).to.be.bignumber.equal(getContracts().maxCVIValue);
+        //expect((await getContracts().fakeOracleV1.getCVILatestRoundData()).cviValue).to.be.bignumber.equal(getContracts().maxCVIValue);
     });
 
     it('reverts when trying to close too many positional units', async () => {
         await this.fakePriceProvider.setPrice(toCVI(5000));
 
         await expectRevert(this.platform.closePosition(1, 5000, {from: alice}), 'Not enough opened position units');
-        await depositAndValidate(this.state, toTokenAmount(4), bob);
+        await depositAndValidate(this.state, toTokenAmount(5), bob);
         await expectRevert(this.platform.closePosition(1, 5000, {from: alice}), 'Not enough opened position units');
         const {positionUnits} = await openPositionAndValidate(this.state, toTokenAmount(1), alice);
 
@@ -644,7 +996,7 @@ const setPlatformTests = isETH => {
 
         await time.increase(24 * 60 * 60);
 
-        await expectRevert(closePosition(0, 5000, alice), 'Position units not positive');
+        await expectRevert.unspecified(closePosition(0, 5000, alice));
     });
 
     it('reverts when closing a position with an invalid min CVI value', async () => {
@@ -654,7 +1006,7 @@ const setPlatformTests = isETH => {
         await time.increase(24 * 60 * 60);
 
         await expectRevert(closePosition(positionUnits, 0, alice), 'Bad min CVI value');
-        await expectRevert(closePosition(positionUnits, 20001, alice), 'Bad min CVI value');
+        await expectRevert(closePosition(positionUnits, getContracts().maxCVIValue.toNumber() + 1, alice), 'Bad min CVI value');
 
         await closePosition(positionUnits, 5000, alice);
     });
@@ -708,33 +1060,37 @@ const setPlatformTests = isETH => {
         await closePositionAndValidate(this.state, positionUnits.div(new BN(2)), alice);
     });
 
-    it('updates total funding fee back to zero instead of overflowing when rounding, if poision units updates to zero', async () => {
+    it('updates total funding fee back to zero instead of overflowing when rounding, if position units updates to zero', async () => {
         await depositAndValidate(this.state, 5000, bob);
 
         const {positionUnits} = await openPositionAndValidate(this.state, 1000, alice);
         await time.increase(24 * 60 * 60);
+        await this.fakePriceProvider.setPrice(toCVI(5000));
 
         // Total funding fees grow here
         await depositAndValidate(this.state, 1000, bob);
         await time.increase(24 * 60 * 60);
+        await this.fakePriceProvider.setPrice(toCVI(5000));
 
         // And should go back to 1 here (because of rounding), so making sure they go to -1 with total position units going back to 0 as well
         await closePositionAndValidate(this.state, positionUnits, alice);
     });
 
-    it('updates total funding fee back to zero instead of overflowing when rounding on merge, if poision units updates to zero', async () => {
+    it('updates total funding fee back to zero instead of overflowing when rounding on merge, if position units updates to zero', async () => {
         await this.fakePriceProvider.setPrice(toCVI(10000));
         await depositAndValidate(this.state, 5000, bob);
 
         await openPositionAndValidate(this.state, 1000, alice);
         await time.increase(2 * 24 * 60 * 60);
+        await this.fakePriceProvider.setPrice(toCVI(10000));
 
         // Total funding fees grow here
         const {positionUnits} = await openPositionAndValidate(this.state, 5, alice);
-        await time.increase(24 * 60 * 60);
+        /*await time.increase(24 * 60 * 60);
+        await this.fakePriceProvider.setPrice(toCVI(10000));
 
         // And should go back to 1 here (because of rounding), so making sure they go to -1 with total position units going back to 0 as well
-        await closePositionAndValidate(this.state, positionUnits, alice);
+        await closePositionAndValidate(this.state, positionUnits, alice);*/
     });
 
     it.skip('updates total funding fee back to zero instead of one when rounding, if position units updates to zero', async () => {
@@ -764,6 +1120,7 @@ const setPlatformTests = isETH => {
         expect(await this.platform.cviSnapshots(timestamp1)).to.be.bignumber.not.equal(new BN(0));
 
         await time.increase(3 * 24 * 60 * 60);
+        this.fakePriceProvider.setPrice(toCVI(5000));
 
         const timestamp2 = await withdrawAndValidate(this.state, 1000, bob);
 
@@ -777,6 +1134,7 @@ const setPlatformTests = isETH => {
         expect(await this.platform.cviSnapshots(timestamp3)).to.be.bignumber.not.equal(new BN(0));
 
         await time.increase(24 * 60 * 60);
+        this.fakePriceProvider.setPrice(toCVI(5000));
 
         const timestamp4 = await closePositionAndValidate(this.state, positionUnits, alice);
         expect(await this.platform.cviSnapshots(timestamp3)).to.be.bignumber.not.equal(new BN(0));
@@ -793,12 +1151,17 @@ const setPlatformTests = isETH => {
         await testLastSnapshotRemove(true);
     });
 
-    it('sets purgeSnapshots properly', async () => {
-        await this.platform.setCanPurgeSnapshots(false, {from: admin});
+    it('sets can purge snapshots properly', async () => {
+        const beforeEmergencyWithdrawAllowed = await this.platform.emergencyWithdrawAllowed();
+        await this.platform.setEmergencyParameters(beforeEmergencyWithdrawAllowed, false, {from: admin});
+        const afterEmergencyWithdrawAllowed = await this.platform.emergencyWithdrawAllowed();
+        expect(beforeEmergencyWithdrawAllowed).to.equal(afterEmergencyWithdrawAllowed);
+
         await testLastSnapshotRemove(false);
     });
 
     it('reverts when opening with a leverage higher than max', async () => {
+        await this.platform.setMaxAllowedLeverage(1, {from: admin});
         await expectRevert(openPosition(1000, 5000, bob, 1000, 2), 'Leverage excceeds max allowed');
     });
 
@@ -822,7 +1185,7 @@ const setPlatformTests = isETH => {
         const feesCollectorBalance = await getFeesBalance(this.fakeFeesCollector);
         expect(feesCollectorBalance).to.be.bignumber.not.equal(new BN(0));
 
-        await this.platform.setFeesCollector(anotherFakeFeesCollector.address, {from: admin});
+        await setFeesCollector(anotherFakeFeesCollector.address, {from: admin});
         this.state.totalFeesSent = new BN(0);
 
         await openPositionAndValidate(this.state, 1000, alice);
@@ -831,6 +1194,8 @@ const setPlatformTests = isETH => {
     });
 
     it('sets maxLeverage properly', async () => {
+        await this.platform.setMaxAllowedLeverage(1, {from: admin});
+
         if (!this.isETH) {
             await this.token.transfer(alice, 1000, {from: admin});
             await this.token.approve(this.platform.address, 10000, {from: alice});
@@ -910,6 +1275,7 @@ const setPlatformTests = isETH => {
         expect(await this.platform.cviSnapshots(timestamp2)).to.be.bignumber.not.equal(new BN(0));
 
         await time.increase(3 * 24 * 60 * 60);
+        this.fakePriceProvider.setPrice(toCVI(5000));
 
         const {timestamp: timestamp4} = await openPositionAndValidate(this.state, 100, alice);
         const timestamp3 = await withdrawAndValidate(this.state, 1000, bob);
@@ -941,12 +1307,14 @@ const setPlatformTests = isETH => {
         await depositAndValidate(this.state, 3000, carol);
 
         await time.increase(3 * 24 * 60 * 60);
+        this.fakePriceProvider.setPrice(toCVI(5000));
 
         await withdrawAndValidate(this.state, 100, bob);
         const {positionUnits} = await openPositionAndValidate(this.state, 200, alice);
         await depositAndValidate(this.state, 3000, carol);
 
         await time.increase(3 * 24 * 60 * 60);
+        this.fakePriceProvider.setPrice(toCVI(5000));
 
         await closePositionAndValidate(this.state, positionUnits, alice);
         await withdrawAndValidate(this.state, 3000, carol);
@@ -975,167 +1343,88 @@ const setPlatformTests = isETH => {
         await expectRevert(this.platform.liquidatePositions([alice, bob, carol, dave], {from: dave}), 'No liquidatable position');
     });
 
-    /*
-    it('withdraws all lp tokens prevented due to collateral ratio restrictions', async () => {
-        let cviValue = toCVI(5000);
-        await this.fakePriceProvider.setPrice(cviValue);
-        const cviValueFromOracle = (await this.fakeOracle.getCVILatestRoundData()).cviValue;
+    it('reverts when action attempted during lockup period - buyers', async () => {
+        await this.platform.setLockupPeriods(240, SECONDS_PER_DAY, {from: admin});
 
-        await this.token.transfer(bob, toTokenAmount(50000), {from: admin});
-        await this.token.approve(this.platform.address, toTokenAmount(50000), {from: bob});
-
-        await this.token.transfer(alice, toTokenAmount(50000), {from: admin});
-        await this.token.approve(this.platform.address, toTokenAmount(50000), {from: alice});
-
-        await this.platform.deposit(toTokenAmount(50000), toTokenAmount(48500), {from: bob});
-        let feesTokens = toTokenAmount(50000).mul(DEPOSIT_FEE_PERC).div(MAX_FEE);
-        let tokensInSharedPool = toTokenAmount(50000).mul(MAX_FEE.sub(DEPOSIT_FEE_PERC)).div(MAX_FEE);
-
-        let bobLPTokensBalance = await this.platform.balanceOf(bob);
-
-        await time.increase(3 * SECONDS_PER_DAY);
-
-        let tx = await this.platform.openPosition(toTokenAmount(1000), 5000, 1, {from: alice});
-        let currTurbulence = await this.feesCalculator.turbulenceIndicatorPercent();
-        let currPositionUnits = toTokenAmount(1000).mul(new BN(4)).mul(MAX_FEE.sub(OPEN_FEE_PERC).sub(currTurbulence)).div(MAX_FEE);
-        let feesAmount = toTokenAmount(1000).mul(OPEN_FEE_PERC.add(currTurbulence)).div(MAX_FEE);
-        verifyOpenPositionEvent(tx.logs[0], alice, toTokenAmount(1000), currPositionUnits, cviValueFromOracle, feesAmount);
-
-        await expectRevert(this.platform.withdrawLPTokens(bobLPTokensBalance, {from: bob}), 'Collateral ratio broken');
+        await depositAndValidate(this.state, 5000, bob);
+        const {positionUnits: positionUnits1} = await openPositionAndValidate(this.state, 1000, alice);
+        await time.increase(SECONDS_PER_DAY - 10);
+        await expectRevert(closePositionAndValidate(this.state, positionUnits1, alice), 'Position locked');
+        await time.increase(10);
+        await closePositionAndValidate(this.state, positionUnits1, alice);
     });
 
-    it('Verify turbulence premium ', async () => {
-        let cviValue = toCVI(5000);
-        await this.fakePriceProvider.setPrice(cviValue);
-        const cviValueFromOracle = (await this.fakeOracle.getCVILatestRoundData()).cviValue;
+    it('does not revert when in buyers lockup period but account set as not locked', async () => {
+        await depositAndValidate(this.state, 20000, bob);
+        const {positionUnits: positionUnits1} = await openPositionAndValidate(this.state, 1000, alice);
+        const {positionUnits: positionUnitsCarol} = await openPositionAndValidate(this.state, 1000, carol);
+        await expectRevert(closePositionAndValidate(this.state, positionUnits1, alice), 'Position locked');
+        await expectRevert(closePositionAndValidate(this.state, positionUnitsCarol, carol), 'Position locked');
+        await this.platform.setAddressSpecificParameters(alice, false, false, false, {from: admin});
+        await expectRevert(closePositionAndValidate(this.state, positionUnitsCarol, carol), 'Position locked');
+        await closePosition(positionUnits1, 5000, alice);
 
-        await this.token.transfer(bob, toTokenAmount(50000), {from: admin});
-        await this.token.approve(this.platform.address, toTokenAmount(50000), {from: bob});
+        await this.platform.setAddressSpecificParameters(alice, true, false, false, {from: admin});
 
-        await this.token.transfer(alice, toTokenAmount(50000), {from: admin});
-        await this.token.approve(this.platform.address, toTokenAmount(50000), {from: alice});
+        if (!getContracts().isETH) {
+            await getContracts().token.transfer(alice, 1000, {from: admin});
+            await getContracts().token.approve(getContracts().platform.address, 1000, {from: alice});
+        }
+        await openPosition(1000, 20000, alice);
 
-        await this.platform.deposit(toTokenAmount(50000), toTokenAmount(48500), {from: bob});
-        let feesTokens = toTokenAmount(50000).mul(DEPOSIT_FEE_PERC).div(MAX_FEE);
-        let tokensInSharedPool = toTokenAmount(50000).mul(MAX_FEE.sub(DEPOSIT_FEE_PERC)).div(MAX_FEE);
-
-        let bobLPTokensBalance = await this.platform.balanceOf(bob);
-
-        await time.increase( 1800 );
-        await this.fakePriceProvider.setPrice(cviValue);
-
-        await this.feeModel.updateSnapshots();
-
-        let currTurbulence = await this.feesCalculator.turbulenceIndicatorPercent();
-        expect(currTurbulence).to.be.bignumber.equal(TURBULENCE_PREMIUM_PERC_STEP);
-
-        let tx = await this.platform.openPosition(toTokenAmount(1000), 5000, 1, {from: alice});
-        let currPositionUnits = toTokenAmount(1000).mul(new BN(4)).mul(MAX_FEE.sub(OPEN_FEE_PERC).sub(currTurbulence)).div(MAX_FEE);
-        let feesAmount = toTokenAmount(1000).mul(OPEN_FEE_PERC.add(currTurbulence)).div(MAX_FEE);
-        verifyOpenPositionEvent(tx.logs[0], alice, toTokenAmount(1000), currPositionUnits, cviValueFromOracle, feesAmount);
-
-        await time.increase( 1800 );
-        await this.feeModel.updateSnapshots();
-        await time.increase( 1800 );
-
-        await this.fakePriceProvider.setPrice(cviValue);
-
-        await time.increase( 1800 );
-        await this.feeModel.updateSnapshots();
-
-        currTurbulence = await this.feesCalculator.turbulenceIndicatorPercent();
-        expect(currTurbulence).to.be.bignumber.equal(new BN(0));
-
-        let tx2 = await this.platform.openPosition(toTokenAmount(1000), 5000, 1, {from: alice});
-        let currPositionUnits2 = currPositionUnits.add(toTokenAmount(1000).mul(new BN(4)).mul(MAX_FEE.sub(OPEN_FEE_PERC).sub(currTurbulence)).div(MAX_FEE));
-        let newFeesAmount = toTokenAmount(1000).mul(OPEN_FEE_PERC.add(currTurbulence)).div(MAX_FEE);
-        verifyOpenPositionEvent(tx2.logs[0], alice, toTokenAmount(1000), currPositionUnits2, cviValueFromOracle, newFeesAmount);
+        await expectRevert(closePosition(1, 5000, alice), 'Position locked');
     });
 
-    it('opens first position properly for a high collateral ratio', async () => {
-        let cviValue = toCVI(4000);
-        await this.fakePriceProvider.setPrice(cviValue);
-        const cviValueFromOracle = (await this.fakeOracle.getCVILatestRoundData()).cviValue;
+    it('reverts when action attempted during lockup period - LPs', async () => {
+        await this.platform.setLockupPeriods(240, 120, {from: admin});
 
-        await this.token.transfer(bob, toTokenAmount(50000), {from: admin});
-        await this.token.approve(this.platform.address, toTokenAmount(50000), {from: bob});
-
-        await this.token.transfer(alice, toTokenAmount(50000), {from: admin});
-        await this.token.approve(this.platform.address, toTokenAmount(50000), {from: alice});
-
-        let depositTokenAmount = toTokenAmount(5000);
-        await this.platform.deposit(depositTokenAmount, toTokenAmount(48500), {from: bob});
-        let feesTokens = depositTokenAmount.mul(DEPOSIT_FEE_PERC).div(MAX_FEE);
-        let tokensInSharedPool = depositTokenAmount.mul(MAX_FEE.sub(DEPOSIT_FEE_PERC)).div(MAX_FEE);
-
-        let openTokenAmount = toTokenAmount(1250);
-
-        let currPositionUnits;
-        let combineedBuyingPremiumPercent;
-        let collateralRatio;
-        let minPositionUnitsAmount;
-        let previousPositionUnits = new BN(0);
-        [currPositionUnits, combineedBuyingPremiumPercent, collateralRatio, minPositionUnitsAmount] = await calculationsForBuyingPremium(cviValueFromOracle, openTokenAmount, previousPositionUnits);
-
-        let tx = await this.platform.openPosition(openTokenAmount, 10000, 1, {from: alice});
-        let feesAmount = openTokenAmount.mul(OPEN_FEE_PERC.add(combineedBuyingPremiumPercent)).div(MAX_FEE);
-        verifyOpenPositionEvent(tx.logs[0], alice, openTokenAmount, currPositionUnits, cviValueFromOracle, feesAmount);
-
-        tokensInSharedPool = tokensInSharedPool.add(openTokenAmount.mul(MAX_FEE.sub(OPEN_FEE_PERC)).div(MAX_FEE));
-        feesTokens = feesTokens.add(openTokenAmount.mul(OPEN_FEE_PERC).div(MAX_FEE));
-
-        expect(await this.token.balanceOf(this.platform.address)).to.be.bignumber.equal(tokensInSharedPool);
-        expect(await this.fakeFeesCollector.getProfit()).to.be.bignumber.equal(feesTokens);
-        expect(await this.token.balanceOf(alice)).to.be.bignumber.equal( toTokenAmount(50000).sub(openTokenAmount) );
+        await depositAndValidate(this.state, 1000, bob);
+        await time.increase(200);
+        const bobLPTokensBalance = await this.platform.balanceOf(bob);
+        await expectRevert(withdrawAndValidate(this.state, 0, bob, bobLPTokensBalance), 'Funds are locked');
+        await time.increase(40);
+        await withdrawAndValidate(this.state, 0, bob, bobLPTokensBalance);
+        expect(await this.platform.balanceOf(bob)).to.be.bignumber.equal(new BN(0));
     });
 
-    it('opens two positions properly for a high collateral ratio', async () => {
-        let cviValue = toCVI(4000);
-        await this.fakePriceProvider.setPrice(cviValue);
-        const cviValueFromOracle = (await this.fakeOracle.getCVILatestRoundData()).cviValue;
+    it('reverts when attempting to execute an ownable function by non admin user', async () => {
+        const expectedError = 'Ownable: caller is not the owner';
 
-        await this.token.transfer(bob, toTokenAmount(50000), {from: admin});
-        await this.token.approve(this.platform.address, toTokenAmount(50000), {from: bob});
+        // Tests setSubContracts
+        await expectRevert(setFeesCalculator(this.feesCalculator.address, {from: bob}), expectedError);
 
-        await this.token.transfer(alice, toTokenAmount(50000), {from: admin});
-        await this.token.approve(this.platform.address, toTokenAmount(50000), {from: alice});
+        await expectRevert(this.platform.setEmergencyParameters(false, false, {from: alice}), expectedError);
+        await expectRevert(this.platform.setMaxAllowedLeverage(new BN(8), {from: dave}), expectedError);
+        await expectRevert(this.platform.setLockupPeriods(60 * 60 * 24, 24 * 60 * 60, {from: dave}), expectedError);
+        await expectRevert(this.platform.setAddressSpecificParameters(bob, false, true, true, {from: carol}), expectedError);
+        await expectRevert(this.platform.setLatestOracleRoundId(2, {from: dave}), expectedError);
 
-        let depositTokenAmount = toTokenAmount(5000);
-        await this.platform.deposit(depositTokenAmount, toTokenAmount(48500), {from: bob});
-        let feesTokens = depositTokenAmount.mul(DEPOSIT_FEE_PERC).div(MAX_FEE);
-        let tokensInSharedPool = depositTokenAmount.mul(MAX_FEE.sub(DEPOSIT_FEE_PERC)).div(MAX_FEE);
+        const staking = await StakingRewards.new(admin, admin, this.cviToken.address, this.platform.address);
+        await expectRevert(setStakingContractAddress(staking.address, {from: bob}), expectedError);
+    });
 
-        let openTokenAmount = toTokenAmount(750);
-        let currPositionUnits;
-        let combineedBuyingPremiumPercent;
-        let collateralRatio;
-        let minPositionUnitsAmount;
-        let previousPositionUnits = new BN(0);
-        [currPositionUnits, combineedBuyingPremiumPercent, collateralRatio, minPositionUnitsAmount] = await calculationsForBuyingPremium(cviValueFromOracle, openTokenAmount, previousPositionUnits);
+    it('position balance calculated properly', async () => {
+        await depositAndValidate(this.state, toBN(30000, 6), bob);
+        await openPositionAndValidate(this.state, toBN(2000, 6), alice);
 
-        let tx = await this.platform.openPosition(openTokenAmount, 10000, 1, {from: alice});
-        let feesAmount = openTokenAmount.mul(OPEN_FEE_PERC.add(combineedBuyingPremiumPercent)).div(MAX_FEE);
-        verifyOpenPositionEvent(tx.logs[0], alice, openTokenAmount, currPositionUnits, cviValueFromOracle, feesAmount);
-        tokensInSharedPool = tokensInSharedPool.add(openTokenAmount.mul(MAX_FEE.sub(OPEN_FEE_PERC)).div(MAX_FEE));
-        feesTokens = feesTokens.add(openTokenAmount.mul(OPEN_FEE_PERC).div(MAX_FEE));
+        const balance1 = (await getContracts().platform.calculatePositionBalance(alice))[0];
+        console.log('balance1', balance1.toString());
 
-        let newOpenTokenAmount = toTokenAmount(500);
-        [currPositionUnits, combineedBuyingPremiumPercent, collateralRatio, minPositionUnitsAmount] = await calculationsForBuyingPremium(cviValueFromOracle, newOpenTokenAmount, currPositionUnits);
+        await this.fakePriceProvider.setPrice(toCVI(10000));
 
-        tx = await this.platform.openPosition(newOpenTokenAmount, 10000, 1, {from: alice});
-        let newFeesAmount = newOpenTokenAmount.mul(OPEN_FEE_PERC.add(combineedBuyingPremiumPercent)).div(MAX_FEE);
-        verifyOpenPositionEvent(tx.logs[0], alice, newOpenTokenAmount, currPositionUnits, cviValueFromOracle, newFeesAmount);
+        const balance2 = (await getContracts().platform.calculatePositionBalance(alice))[0];
+        console.log('balance2', balance2.toString());
 
-        tokensInSharedPool = tokensInSharedPool.add(newOpenTokenAmount.mul(MAX_FEE.sub(OPEN_FEE_PERC)).div(MAX_FEE));
-        feesTokens = feesTokens.add(newOpenTokenAmount.mul(OPEN_FEE_PERC).div(MAX_FEE));
+        await time.increase(24 * 60 * 60);
 
-        expect(await this.token.balanceOf(this.platform.address)).to.be.bignumber.equal(tokensInSharedPool);
-        expect(await this.fakeFeesCollector.getProfit()).to.be.bignumber.equal(feesTokens);
-        expect(await this.token.balanceOf(alice)).to.be.bignumber.equal( toTokenAmount(50000).sub(openTokenAmount).sub(newOpenTokenAmount) );
-    });*/
+        await this.fakePriceProvider.setPrice(toCVI(5000));
+
+        const balance3 = (await getContracts().platform.calculatePositionBalance(alice))[0];
+        console.log('balance3', balance3.toString());
+    });
 };
 
-describe('ETHPlatform', () => {
+describe.skip('ETHPlatform', () => {
     beforeEach(async () => {
         await beforeEachPlatform(true);
     });

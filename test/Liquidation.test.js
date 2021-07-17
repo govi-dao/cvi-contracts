@@ -1,7 +1,7 @@
 const {expectRevert, BN} = require('@openzeppelin/test-helpers');
 const {accounts, contract} = require('@openzeppelin/test-environment');
 const chai = require('chai');
-const Liquidation = contract.fromArtifact('LiquidationV2');
+const Liquidation = contract.fromArtifact('Liquidation');
 
 const expect = chai.expect;
 const [admin, alice] = accounts;
@@ -9,7 +9,7 @@ const [admin, alice] = accounts;
 const LIQUIDATION_MIN_REWARD_PERCENT = new BN(5);
 const LIQUIDATION_MAX_FEE_PERCENTAGE = new BN(1000);
 
-const CVI_MAX_VALUE = new BN(20000);
+const CVI_MAX_VALUE = new BN(22000);
 
 const MAX_LEVERAGE = 8;
 const LEVERAGES = [new BN(1)];
@@ -24,7 +24,7 @@ const LEVERAGE_TO_MAX = [new BN(30), new BN(30), new BN(30), new BN(30), new BN(
 const OPEN_CVI_VALUES = [new BN(5000), new BN(10000), new BN(15000), new BN(20000)];
 
 const calculateBalanceByPU = (positionUnits, openCVIValue, threshold, leverage = new BN(1)) => {
-    const originalBalance = positionUnits.mul(openCVIValue).div(CVI_MAX_VALUE).div(leverage);
+    const originalBalance = positionUnits.mul(openCVIValue).div(CVI_MAX_VALUE).sub(positionUnits.mul(openCVIValue).div(CVI_MAX_VALUE).mul(leverage.sub(new BN(1))).div(leverage));
     return originalBalance.mul(threshold).div(LIQUIDATION_MAX_FEE_PERCENTAGE);
 };
 
@@ -77,7 +77,7 @@ const testLiquidationReward = async (thresholds, minRewardThreshold, maxRewards)
 
 describe('Liquidation', () => {
     beforeEach(async () => {
-        this.liquidation = await Liquidation.new({from: admin});
+        this.liquidation = await Liquidation.new(CVI_MAX_VALUE, {from: admin});
     });
 
     it('detects liquidation properly', async () => {

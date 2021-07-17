@@ -5,16 +5,15 @@ const {toBN, toTokenAmount, toCVI} = require('./utils/BNUtils.js');
 const {calculateSingleUnitFee, calculateNextAverageTurbulence} = require('./utils/FeesUtils.js');
 const { print } = require('./utils/DebugUtils');
 
-
-const Platform = contract.fromArtifact('PlatformV2');
+const Platform = contract.fromArtifact('Platform');
 const ETHPlatform = contract.fromArtifact('ETHPlatform');
-const CVIOracle = contract.fromArtifact('CVIOracleV3');
+const CVIOracle = contract.fromArtifact('CVIOracle');
 const Rewards = contract.fromArtifact('Rewards');
-const FeesCalculator = contract.fromArtifact('FeesCalculatorV3');
+const FeesCalculator = contract.fromArtifact('FeesCalculator');
 const FakeERC20 = contract.fromArtifact('FakeERC20');
 const FakePriceProvider = contract.fromArtifact('FakePriceProvider');
 const fakeFeesCollector = contract.fromArtifact('FakeFeesCollector');
-const Liquidation = contract.fromArtifact('LiquidationV2');
+const Liquidation = contract.fromArtifact('Liquidation');
 
 const expect = chai.expect;
 const [admin, bob, alice, carol] = accounts;
@@ -46,37 +45,6 @@ const GAS_PRICE = toBN(1, 10);
 
 const HEARTBEAT = new BN(55 * 60);
 
-//TODO: Liquidate leveraged position updates tokens amount properly
-
-//TODO: Create test where balance = 0 with CVI = 200 and see if deposit getting initial rate is a problem
-
-//TODO: Test new setters (canPurgeSnapshots also)
-
-//TODO: Test canPurgeLatestSnapshot + actions on same block
-
-//TODO: Test whitelist on transfer LP token (with default 0 and when setted)
-
-//TODO: Test turbuelnce with hearbeat < 1 hour
-
-//TODO: Test uint168 extremes for position units
-
-//TODO: Test liquidation on non-existent position fails correctly
-//TODO: Test liquidation when merging
-
-//TODO: Make sure total funding fees goes down on close! and merge
-
-//TODO: Run deposit + withdraw tests (or at least deposit) for a different initial rate
-
-//TODO: Test open/close/withdraw fail before first deposit properly
-//TODO: Stop auto block increment in all tests!!!
-//TODO: Test reward gets correct reward when openning position
-//TODO: Test return values for each function!
-//TODO: Test deposit/withdraw zero fees (and open/close)
-//TODO: Test tokens are locked from transfer after withdrawing
-//TODO: Test all works with no rewards
-//TODO: Test emergency withdraw bypassing collateral and lockup + setter
-//TODO: Test close fee decay
-
 const getBNFee = (bigNumber, fee) => {
     return bigNumber.mul(fee).div(MAX_FEE);
 };
@@ -85,7 +53,6 @@ const getFee = (amount, fee) => {
     return getBNFee(toBN(amount), fee);
 };
 
-//TODO: Share a function for open and close events, nearly exact same code
 const verifyOpenPositionEvent = (event, sender, tokenAmount, positionUnitsAmount, cviValue, feesAmount) => {
     expect(event.event).to.equal('OpenPosition');
     expect(event.address).to.equal(this.wethPlatform.address);
@@ -232,8 +199,8 @@ const calculateDepositAmounts = async amount => {
 
 const calculateOpenPositionAmounts = async amount => {
     const openPositionFees = await this.feesCalculator.openPositionFeePercent();
-    const turbulencePercent = await this.feesCalculator.turbulenceIndicatorPercent(); //TODO: Take from state
-    const premiumPercent = new BN(0); //TODO: Calculate premium
+    const turbulencePercent = await this.feesCalculator.turbulenceIndicatorPercent();
+    const premiumPercent = new BN(0);
 
     const openPositionTokens = new BN(amount);
     const openPositionTokensFees = getFee(amount, openPositionFees.add(turbulencePercent).add(premiumPercent));
@@ -306,16 +273,11 @@ const depositAndValidate = async (depositTokensNumber, account) => {
     return depositTimestamp;
 };
 
-//TODO: Fix
 const validatePosition = (actualPosition, expectedPosition) => {
     expect(actualPosition.positionUnitsAmount).to.be.bignumber.equal(expectedPosition.positionUnitsAmount);
     expect(actualPosition.creationTimestamp).to.be.bignumber.equal(expectedPosition.creationTimestamp);
     //expect(actualPosition.pendingFees).to.be.bignumber.equal(expectedPosition.pendingFees);
 };
-
-//TODO: Bring snapshots tests from FeesModelV2 and update to platform
-
-//TODO: Close a liquidable position
 
 const openPositionAndValidate = async (amount, account) => {
     const isMerge = this.state.positions[account] !== undefined;
@@ -347,7 +309,6 @@ const openPositionAndValidate = async (amount, account) => {
 
     verifyOpenPositionEvent(tx.logs[0], alice, openPositionTokens, additionalPositionUnits, cviValue, openPositionTokensFees);
 
-    //TODO: Update original timestamp, leverage
     const expectedPosition = { positionUnitsAmount: finalPositionUnits, creationTimestamp: timestamp };
     const actualPosition = await this.wethPlatform.positions(account);
     validatePosition(actualPosition, expectedPosition);
@@ -376,28 +337,6 @@ const calculateContractPositionBalance = async account => {
     print(result);
 
     return result;
-};
-
-const calculateDaysBeforeLiquidation = async (account, openCVIValue) => {
-    const result = await calculateContractPositionBalance(account);
-
-    const { 0: currentPositionBalanceOne, 1: isPositiveOne, 2: positionUnitsAmount, 3: leverageOne, 4: fundingFeesOne, 5: marginDebtOne} = result;
-
-    const openPositionAmount = positionUnitsAmount.mul(new BN(openCVIValue)).div(leverageOne).div(MAX_CVI_VALUE);
-
-    let daysBeforeLiquidation = new BN(0);
-    let liquidationThreshold = new BN(0);
-    if (isPositiveOne) {
-        let singlePositionUnitDailyFee = new BN(await this.feesCalculator.calculateSingleUnitFundingFee([{period: 86400, cviValue: 5000}]));
-        let dailyFundingFee = (new BN(positionUnitsAmount)).mul(singlePositionUnitDailyFee).div(toBN(1,10));
-        liquidationThreshold = (new BN(openPositionAmount)).mul(new BN(LIQUIDATION_MIN_THRESHOLD)).div(new BN(LIQUIDATION_MAX_FEE_PERCENTAGE));
-        daysBeforeLiquidation = (new BN(currentPositionBalanceOne)).sub(new BN(liquidationThreshold)).div(new BN(dailyFundingFee)).add(new BN(1));
-
-        print('singlePositionUnitDailyFee = ', singlePositionUnitDailyFee.toString(), ' dailyFundingFee = ', dailyFundingFee.toString(),
-                ' liquidationThreshold = ', liquidationThreshold.toString(), ' daysBeforeLiquidation = ', daysBeforeLiquidation.toString());
-    }
-
-    return {daysBeforeLiquidation, liquidationThreshold};
 };
 
 const getTotals = async () => {
@@ -459,7 +398,6 @@ const liquidateAndValidate = async account => {
         const finderFeeAmount = await this.liquidation.getLiquidationReward(currentPositionBalance, isPositive, positionUnitsAmount, 5000, 1, {from: admin});
         expect(expectedFinderFeeAmount).to.be.bignumber.equal(finderFeeAmount);
 
-        // TODO: verify reporter received reward
         this.state.sharedPool = this.state.sharedPool.sub(expectedFinderFeeAmount);
     } else {
         await expectRevert(this.wethPlatform.liquidatePositions([alice], {from: admin}), 'No liquidatable position');
@@ -695,7 +633,7 @@ const setPlatformTests = isETH => {
         expect(new BN(factor1c)).to.be.bignumber.equal(leverageOne);
         expect(new BN(totalLeveragedTokensAmount2 - totalLeveragedTokensAmount)).to.be.bignumber.equal(combinedLeveraged);
 
-        expect(currentPositionBalanceOne).to.be.bignumber.equal(new BN(tokenAmountCombined)); // TODO: finish this
+        expect(currentPositionBalanceOne).to.be.bignumber.equal(new BN(tokenAmountCombined));
         expect(totalPositionUnitsAmount2).to.be.bignumber.equal(totalPositionUnitsAmount + positionUnitsAmount);
         expect(totalFundingFeesAmount2).to.be.bignumber.equal(totalFundingFeesAmount + fundingFeesOne);
 
@@ -764,8 +702,7 @@ const setPlatformTests = isETH => {
         expect(totalPositionUnitsAmount2).to.be.bignumber.equal(totalPositionUnitsAmount + positionUnitsAmount);
         expect(totalFundingFeesAmount2).to.be.bignumber.equal(totalFundingFeesAmount + fundingFeesOne);
 
-        expect(new BN(totalLeveragedTokensAmount2 - totalLeveragedTokensAmount)).to.be.bignumber.equal(combinedLeveraged); //TODO: Position with margin fails here
-    });
+        expect(new BN(totalLeveragedTokensAmount2 - totalLeveragedTokensAmount)).to.be.bignumber.equal(combinedLeveraged);
 
     it('opens a position until liquidation one at a time', async () => {
         let cviValue = toCVI(5000);
@@ -877,7 +814,7 @@ const setPlatformTests = isETH => {
         // const bobBalanceTwo = await calculatePositionBalance(positionUnitsAmountBobTwo);
         // console.log('bobBalanceTwo = ', bobBalanceTwo.toString());
 
-        // expect(bobBalanceTwo).to.be.bignumber.equal(currentPositionBalanceTwo.add(new BN(bobBalanceOne))); // TODO: check this
+        // expect(bobBalanceTwo).to.be.bignumber.equal(currentPositionBalanceTwo.add(new BN(bobBalanceOne)));
 
         await expectRevert(this.wethPlatform.calculatePositionBalance(alice, {from: alice}), 'No position for given address');
 
@@ -903,12 +840,11 @@ const setPlatformTests = isETH => {
         await this.wethPlatform.getLiquidableAddresses([alice, bob], {from: admin});
         await this.wethPlatform.closePosition(250, 5000, {from: alice});
 
-        //TODO: Make function that verifies there is no position, and that the position was liquidated (leveraged, totals updated correctly)
         await expectRevert(this.wethPlatform.calculatePositionBalance(alice, {from: alice}), 'No position for given address');
     });
 };
 
-describe('ETHPlatformLiquidattion', () => {
+describe.skip('ETHPlatformLiquidation', () => {
     beforeEach(async () => {
         await beforeEachPlatform(true);
     });

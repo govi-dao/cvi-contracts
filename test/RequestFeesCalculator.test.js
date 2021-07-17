@@ -30,8 +30,8 @@ const MAX_PENALTY_TIME = 12 * SECONDS_PER_HOUR;
 
 const MAX_PERCENTAGE = new BN(10000);
 
-const createRequest = (requestType, tokenAmount, maxRequestFeesPercent, owner, requestTimestamp, targetTimestamp) => {
-    return {requestType, tokenAmount, maxRequestFeesPercent, owner, requestTimestamp: requestTimestamp.toString(), targetTimestamp: targetTimestamp.toString()};
+const createRequest = (requestType, tokenAmount, timeDelayRequestFeesPercent, maxRequestFeesPercent, owner, requestTimestamp, targetTimestamp) => {
+    return {requestType, tokenAmount, timeDelayRequestFeesPercent, maxRequestFeesPercent, owner, requestTimestamp: requestTimestamp.toString(), targetTimestamp: targetTimestamp.toString()};
 };
 
 describe('RequestFeesCalcaultor', () => {
@@ -47,42 +47,55 @@ describe('RequestFeesCalcaultor', () => {
     });
 
     it('reverts when time delay is too small', async () => {
-        await expectRevert(this.requestFeesCalculator.calculateTimeDelayFee(1000, MIN_TIME_DELAY - 2), 'Time delay too small');
-        await this.requestFeesCalculator.calculateTimeDelayFee(1000, MIN_TIME_DELAY);
+        await expectRevert(this.requestFeesCalculator.calculateTimeDelayFee(MIN_TIME_DELAY - 2), 'Time delay too small');
+        await this.requestFeesCalculator.calculateTimeDelayFee(MIN_TIME_DELAY);
     });
 
     it('reverts when time delay is too big', async () => {
-        await expectRevert(this.requestFeesCalculator.calculateTimeDelayFee(1000, MAX_TIME_DELAY + 1), 'Time delay too big');
-        await this.requestFeesCalculator.calculateTimeDelayFee(1000, MAX_TIME_DELAY - 1);
+        await expectRevert(this.requestFeesCalculator.calculateTimeDelayFee(MAX_TIME_DELAY + 1), 'Time delay too big');
+        await this.requestFeesCalculator.calculateTimeDelayFee(MAX_TIME_DELAY - 1);
     });
 
     it('calculates time delay fee properly', async () => {
-        const timeDelays = [SECONDS_PER_HOUR, 2 * SECONDS_PER_HOUR, 3 * SECONDS_PER_HOUR];
+        const timeDelays = [SECONDS_PER_HOUR, 3 * SECONDS_PER_HOUR / 2, 2 * SECONDS_PER_HOUR, 5 * SECONDS_PER_HOUR / 2, 3 * SECONDS_PER_HOUR];
 
-        for (let amount of TEST_AMOUNTS) {
-            for (let timeDelay of timeDelays) {
-                const timeFeePercentage = (new BN(timeDelay)).sub(new BN(SECONDS_PER_HOUR)).mul(MAX_TIME_DELAY_FEE.sub(MIN_TIME_DELAY_FEE)).div(new BN(2 * SECONDS_PER_HOUR));
-                const timeFee = (new BN(amount)).mul(timeFeePercentage).div(MAX_PERCENTAGE);
-                expect(await this.requestFeesCalculator.calculateTimeDelayFee(amount, timeDelay)).to.be.bignumber.equal(timeFee);
-            }
+        for (let timeDelay of timeDelays) {
+            const timeFeePercentage = MAX_TIME_DELAY_FEE.sub((new BN(timeDelay)).sub(new BN(SECONDS_PER_HOUR)).mul(MAX_TIME_DELAY_FEE.sub(MIN_TIME_DELAY_FEE)).div(new BN(2 * SECONDS_PER_HOUR)));
+            expect(await this.requestFeesCalculator.calculateTimeDelayFee(timeDelay)).to.be.bignumber.equal(timeFeePercentage);
         }
     });
 
     it('determines liquidity properly', async () => {
         let now = await time.latest();
-        expect(await this.requestFeesCalculator.isLiquidable(createRequest(1, 1000, 500, bob, now, now.sub(new BN(MAX_PENALTY_TIME + 2))))).to.be.true;
+        expect(await this.requestFeesCalculator.isLiquidable(createRequest(1, 1000, 50, 500, bob, now, now.sub(new BN(MAX_PENALTY_TIME + 2))))).to.be.true;
         now = await time.latest();
-        expect(await this.requestFeesCalculator.isLiquidable(createRequest(1, 1000, 500, bob, now, now.sub(new BN(MAX_PENALTY_TIME - 2))))).to.be.false;
+        expect(await this.requestFeesCalculator.isLiquidable(createRequest(1, 1000, 50, 500, bob, now, now.sub(new BN(MAX_PENALTY_TIME - 2))))).to.be.false;
     });
 
     it('gets max fee properly', async () => {
-        for (let amount of TEST_AMOUNTS) {
-            const result = await this.requestFeesCalculator.getMaxFees(amount);
-            const actualMaxFeesPercent = result[0];
-            const actualMaxFeesAmount = result[1];
+        const actualMaxFeesPercent = await this.requestFeesCalculator.getMaxFees();
+        expect(actualMaxFeesPercent).to.be.bignumber.equal(MAX_PENALTY_FEE);
+    });
 
-            expect(actualMaxFeesPercent).to.be.bignumber.equal(MAX_PENALTY_FEE.add(MAX_TIME_DELAY_FEE));
-            expect(actualMaxFeesAmount).to.be.bignumber.equal(new BN(amount).mul(actualMaxFeesPercent).div(MAX_PERCENTAGE));
+    it('reverts when calculating time penalty before min wait time', async () => {
+        const delay = SECONDS_PER_HOUR;
+        const timesAfterRequestTime = [0, MIN_WAIT_TIME / 2, MIN_WAIT_TIME - 1];
+
+        for (let timeAfterRequest of timesAfterRequestTime) {
+            const now = await time.latest();
+            await expectRevert(this.requestFeesCalculator.calculateTimePenaltyFee(
+                createRequest(1, 1000, 500, 50, bob, now.sub(new BN(timeAfterRequest)), now.add(new BN(delay - timeAfterRequest)))), 'Min wait time not over');
+        }
+    });
+
+    it('reverts when calculating time penalty before min wait time', async () => {
+        const delay = SECONDS_PER_HOUR;
+        const timesAfterRequestTime = [0, MIN_WAIT_TIME / 2, MIN_WAIT_TIME - 1];
+
+        for (let timeAfterRequest of timesAfterRequestTime) {
+            const now = await time.latest();
+            await expectRevert(this.requestFeesCalculator.calculateTimePenaltyFee(
+                createRequest(1, 1000, 500, 50, bob, now.sub(new BN(timeAfterRequest)), now.add(new BN(delay - timeAfterRequest)))), 'Min wait time not over');
         }
     });
 
@@ -95,8 +108,8 @@ describe('RequestFeesCalcaultor', () => {
                 const flooredTimeAfterMinRequestTime = Math.floor(timeAfterRequest);
                 const now = await time.latest();
                 const feePercentage = (new BN(delay - flooredTimeAfterMinRequestTime)).mul(MIN_PENALTY_FEE).div(new BN(delay));
-                const fee = await this.requestFeesCalculator.calculateTimePenaltyFee(createRequest(1, amount, 500, bob, now.sub(new BN(flooredTimeAfterMinRequestTime + MIN_WAIT_TIME)), now.add(new BN(delay - flooredTimeAfterMinRequestTime))));
-                expect(fee).to.be.bignumber.equal(new BN(amount).mul(feePercentage).div(MAX_PERCENTAGE));
+                const actualFeePercentage = await this.requestFeesCalculator.calculateTimePenaltyFee(createRequest(1, amount, 500, 50, bob, now.sub(new BN(flooredTimeAfterMinRequestTime + MIN_WAIT_TIME)), now.add(new BN(delay - flooredTimeAfterMinRequestTime))));
+                expect(actualFeePercentage).to.be.bignumber.equal(feePercentage);
             }
         }
     });
@@ -110,8 +123,8 @@ describe('RequestFeesCalcaultor', () => {
                 const flooredTimeAfterTarget = Math.floor(timeAfterTarget);
                 const now = await time.latest();
                 const feePercentage = (new BN(flooredTimeAfterTarget)).mul(MID_PENALTY_FEE).div(new BN(MID_PENALTY_TIME));
-                const fee = await this.requestFeesCalculator.calculateTimePenaltyFee(createRequest(1, amount, 500, bob, now.sub(new BN(flooredTimeAfterTarget + delay)), now.sub(new BN(flooredTimeAfterTarget))));
-                expect(fee).to.be.bignumber.equal(new BN(amount).mul(feePercentage).div(MAX_PERCENTAGE));
+                const actualFeePercentage = await this.requestFeesCalculator.calculateTimePenaltyFee(createRequest(1, amount, 500, 50, bob, now.sub(new BN(flooredTimeAfterTarget + delay)), now.sub(new BN(flooredTimeAfterTarget))));
+                expect(actualFeePercentage).to.be.bignumber.equal(feePercentage);
             }
         }
     });
@@ -126,8 +139,8 @@ describe('RequestFeesCalcaultor', () => {
                 const flooredTimeAfterTarget = Math.floor(timeAfterTarget);
                 const now = await time.latest();
                 const feePercentage = (new BN(MID_PENALTY_FEE)).add((new BN(flooredTimeAfterTarget)).sub(new BN(MID_PENALTY_TIME)).mul(MAX_PENALTY_FEE.sub(new BN(MID_PENALTY_FEE))).div(new BN(MAX_PENALTY_TIME - MID_PENALTY_TIME)));
-                const fee = await this.requestFeesCalculator.calculateTimePenaltyFee(createRequest(1, amount, 500, bob, now.sub(new BN(flooredTimeAfterTarget + delay)), now.sub(new BN(flooredTimeAfterTarget))));
-                expect(fee).to.be.bignumber.equal(new BN(amount).mul(feePercentage).div(MAX_PERCENTAGE));
+                const actualFeePercentage = await this.requestFeesCalculator.calculateTimePenaltyFee(createRequest(1, amount, 500, 50, bob, now.sub(new BN(flooredTimeAfterTarget + delay)), now.sub(new BN(flooredTimeAfterTarget))));
+                expect(actualFeePercentage).to.be.bignumber.equal(feePercentage);
             }
         }
     });
@@ -139,8 +152,8 @@ describe('RequestFeesCalcaultor', () => {
         for (let amount of TEST_AMOUNTS) {
             for (let timeAfterTarget of timesAfterTarget) {
                 const now = await time.latest();
-                const fee = await this.requestFeesCalculator.calculateTimePenaltyFee(createRequest(1, amount, 500, bob, now.sub(new BN(timeAfterTarget + delay)), now.sub(new BN(timeAfterTarget))));
-                expect(fee).to.be.bignumber.equal(new BN(amount).mul(MAX_PENALTY_FEE).div(MAX_PERCENTAGE));
+                const actualFeePercentage = await this.requestFeesCalculator.calculateTimePenaltyFee(createRequest(1, amount, 500, 50, bob, now.sub(new BN(timeAfterTarget + delay)), now.sub(new BN(timeAfterTarget))));
+                expect(actualFeePercentage).to.be.bignumber.equal(MAX_PENALTY_FEE);
             }
         }
     });

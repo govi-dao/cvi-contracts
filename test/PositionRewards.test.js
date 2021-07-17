@@ -2,25 +2,19 @@ const {expectRevert, time, BN} = require('@openzeppelin/test-helpers');
 const {accounts, contract} = require('@openzeppelin/test-environment');
 const { print } = require('./utils/DebugUtils');
 const chai = require('chai');
-const {toTokenAmount, toUSDT, toBN, toCVI} = require('./utils/BNUtils.js');
 
-const Platform = contract.fromArtifact('Platform');
-const FeesModel = contract.fromArtifact('FeesModel');
-const CVIOracle = contract.fromArtifact('CVIOracle');
-const FeesCalculator = contract.fromArtifact('FeesCalculator');
-const Liquidation = contract.fromArtifact('Liquidation');
-const FakeERC20 = contract.fromArtifact('FakeERC20');
-const FakePriceProvider = contract.fromArtifact('FakePriceProvider');
-const FakeFeesCollector = contract.fromArtifact('FakeFeesCollector');
 const FakePlatform = contract.fromArtifact('FakePlatform');
-const PositionRewards = contract.fromArtifact('PositionRewards');
-const PositionRewardsHelper = contract.fromArtifact('PositionRewardsHelper');
 
 const expect = chai.expect;
 const [admin, bob, alice, carol, dave] = accounts;
+const accountsUsed = [admin, bob, alice, carol, dave];
 
-const INITIAL_RATE = toBN(1, 12);
+const {toTokenAmount, toUSDT, toBN, toCVI} = require('./utils/BNUtils.js');
+const {deployFullPlatform, getContracts, setRewards} = require('./utils/DeployUtils');
+const {createState, depositAndValidate} = require('./utils/PlatformUtils');
+
 const CVI_VALUE = 11000;
+const MAX_FEE = 10000;
 const DAILY_REWARD = toBN(2300, 18);
 const MAX_SINGLE_REWARD = toBN(800, 18);
 const PRECISION_DECIMALS = toBN(1, 10);
@@ -29,23 +23,25 @@ const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 const SECONDS_PER_DAY = 24 * 60 * 60;
 
 const MAX_REWARD_TIME = new BN(SECONDS_PER_DAY * 3);
-const MAX_LINEAR_POSITION_UNITS = toBN(30000, 6); //TODO: Put in beforeEach
-const MAX_LINEAR_GOVI = toBN(100, 18); //TODO: Put in beforeEach
+const MAX_LINEAR_POSITION_UNITS = toBN(20, 18);
+const MAX_LINEAR_GOVI = toBN(100, 18);
 const MAX_TIME_PERCENTAGE_GAIN = toBN(25, 8);
 
-//TODO: Test setCalculationParameters divides by reward factor!
+const FACTOR_REWARD = toBN(1, 13);
+const LEVERAGE = new BN(1);
+
 
 const calculateReward = (positionUnits, timePassed, maxLinearPositionUnits, maxLinearGoi, maxSingleReward, maxRewardTime, maxTimePercentageGain) => {
     const x0 = maxLinearPositionUnits === undefined ? MAX_LINEAR_POSITION_UNITS : maxLinearPositionUnits;
-    const y0 = maxLinearGoi === undefined ? MAX_LINEAR_GOVI : maxLinearGoi;
-    const singleReward = maxSingleReward === undefined ? MAX_SINGLE_REWARD : maxSingleReward;
+    const y0 = (maxLinearGoi === undefined ? MAX_LINEAR_GOVI : maxLinearGoi).div(FACTOR_REWARD);
+    const singleReward = (maxSingleReward === undefined ? MAX_SINGLE_REWARD : maxSingleReward).div(FACTOR_REWARD);
     const rewardTime = maxRewardTime === undefined ? MAX_REWARD_TIME : maxRewardTime;
     const percentageGain = maxTimePercentageGain === undefined ? MAX_TIME_PERCENTAGE_GAIN : maxTimePercentageGain;
 
     const factoredPU = positionUnits.mul(PRECISION_DECIMALS.add(timePassed.mul(percentageGain).div(rewardTime))).div(PRECISION_DECIMALS);
 
     if (factoredPU.lte(x0)) {
-        return factoredPU.mul(y0).div(x0);
+        return factoredPU.mul(y0).div(x0).mul(FACTOR_REWARD);
     }
 
     const two = new BN(2);
@@ -55,7 +51,7 @@ const calculateReward = (positionUnits, timePassed, maxLinearPositionUnits, maxL
     const gamma = two.mul(singleReward).mul(beta).mul(x0).div(y0).sub(beta.pow(two));
     const reward = singleReward.sub(alpha.div(factoredPU.add(beta).pow(two).add(gamma)));
 
-    return reward;
+    return reward.mul(FACTOR_REWARD);
 };
 
 const claimAndValidate = async (account, positionUnits, positionTimestamp, maxLinearPositionUnits, maxLinearGovi, maxSingleReward, maxRewardTime, maxTimePercentageGain) => {
@@ -97,27 +93,29 @@ const transferRewardTokens = async amount => {
 const setPlatform = () => this.rewards.setPlatform(this.platform.address, {from: admin});
 
 const depositToPlatform = async amount => {
-    await this.token.approve(this.platform.address, amount, {from: admin});
-    await this.platform.deposit(amount, new BN(0), {from: admin});
+    await depositAndValidate(this.state, amount, admin);
 };
 
 const openPosition = async (amount, account) => {
+    await this.fakePriceProvider.setPrice(toCVI(CVI_VALUE));
+
     await this.token.transfer(account, amount, {from: admin});
     await this.token.approve(this.platform.address, amount, {from: account});
-    const positionUnits = await this.platform.openPosition.call(amount, CVI_VALUE, {from: account});
-    await this.platform.openPosition(amount, CVI_VALUE, {from: account});
-
+    await this.platform.openPosition(amount, CVI_VALUE, MAX_FEE, 1, {from: account});
     const positionTimestamp = await time.latest();
 
-    return {positionTimestamp, positionUnits};
+    const position = await this.platform.positions(account);
+
+    return {positionTimestamp, positionUnits: position.positionUnitsAmount};
 };
 
 const rewardAndValidate = async (account, tokensAmount, maxLinearPositionUnits, maxLinearGovi, maxSingleReward, maxRewardTime, maxTimePercentageGain) => {
     const beforeRewardAmount = await this.rewards.unclaimedPositionUnits(account);
+    const oldPositionUnits = (await this.platform.positions(account)).positionUnitsAmount;
     const {positionUnits, positionTimestamp} = await openPosition(tokensAmount, account);
     const afterRewardAmount = await this.rewards.unclaimedPositionUnits(account);
 
-    expect(afterRewardAmount.sub(beforeRewardAmount)).to.be.bignumber.equal(positionUnits);
+    expect(afterRewardAmount.sub(beforeRewardAmount)).to.be.bignumber.equal(positionUnits.lt(oldPositionUnits) ? new BN(0) : positionUnits.sub(oldPositionUnits));
 
     await time.increase(SECONDS_PER_DAY);
     const reward = await claimAndValidate(account, positionUnits, positionTimestamp, maxLinearPositionUnits, maxLinearGovi, maxSingleReward, maxRewardTime, maxTimePercentageGain);
@@ -126,34 +124,24 @@ const rewardAndValidate = async (account, tokensAmount, maxLinearPositionUnits, 
 };
 
 describe('PositionRewards', () => {
+
     beforeEach(async () => {
-        this.cviToken = await FakeERC20.new('CVI', 'CVI', toTokenAmount(1000000), 18, {from: admin});
-        this.token = await FakeERC20.new('Wrapped Ether', 'WETH', toTokenAmount(100000), 18, {from: admin});
-        this.fakePriceProvider = await FakePriceProvider.new(80, {from: admin});
-        this.fakeOracle = await CVIOracle.new(this.fakePriceProvider.address, {from: admin});
-        this.feesCalculator = await FeesCalculator.new({from: admin});
-        this.feeModel = await FeesModel.new(this.feesCalculator.address, this.fakeOracle.address, {from: admin});
-        this.fakeFeesCollector = await FakeFeesCollector.new(this.token.address, {from: admin});
-        this.rewards = await PositionRewards.new(this.cviToken.address, {from: admin});
-        this.liquidation = await Liquidation.new({from: admin});
-        this.positionRewardsHelper = await PositionRewardsHelper.new(this.rewards.address, {from: admin});
+        await deployFullPlatform(false);
 
-        this.platform = await Platform.new(
-            this.token.address, 'WETH-LP', 'WETH-LP', INITIAL_RATE, this.feeModel.address,
-            this.feesCalculator.address, this.fakeOracle.address, this.liquidation.address, {from: admin});
+        this.cviToken = getContracts().cviToken;
+        this.token = getContracts().token;
+        this.rewards = getContracts().rewards;
+        this.platform = getContracts().platform;
+        this.fakePriceProvider = getContracts().fakePriceProvider;
 
-        await this.platform.setFeesCollector(this.fakeFeesCollector.address, {from: admin});
-        await this.platform.setRewards(this.rewards.address, {from: admin});
+        await getContracts().feesCalculator.setOpenPositionFee(new BN(0), {from: admin});
+        this.fakePriceProvider.setPrice(toCVI(CVI_VALUE));
 
-        await this.feesCalculator.setOpenPositionFee(new BN(0), {from: admin});
-
-        await this.fakePriceProvider.setPrice(toCVI(CVI_VALUE));
-
-        await this.rewards.setRewarder(this.platform.address, {from: admin});
+        this.state = createState(accountsUsed);
     });
 
     it('reverts when rewarding zero position units', async() => {
-        await expectRevert(this.rewards.reward(bob, new BN(0), {from: this.platform.address}), 'Position units must be positive');
+        await expectRevert(this.rewards.reward(bob, new BN(0), LEVERAGE, {from: this.platform.address}), 'Position units must be positive');
     });
 
     it('rewards position units properly when opening positions', async() => {
@@ -163,23 +151,23 @@ describe('PositionRewards', () => {
         expect(await this.rewards.unclaimedPositionUnits(alice)).to.be.bignumber.equal(new BN(0));
 
         const {positionUnits: bobPositionUnits} = await openPosition(toTokenAmount(1000), bob);
-        const {positionUnits: alicePositionUnits1} = await openPosition(toTokenAmount(2000), alice);
+        await openPosition(toTokenAmount(2000), alice);
         const {positionUnits: alicePositionUnits2} = await openPosition(toTokenAmount(3000), alice);
 
         expect(await this.rewards.unclaimedPositionUnits(bob)).to.be.bignumber.equal(bobPositionUnits);
-        expect(await this.rewards.unclaimedPositionUnits(alice)).to.be.bignumber.equal(alicePositionUnits1.add(alicePositionUnits2));
+        expect(await this.rewards.unclaimedPositionUnits(alice)).to.be.bignumber.equal(alicePositionUnits2);
     });
 
     it('reverts when not rewarding by allowed caller', async() => {
         await this.rewards.setRewarder(admin, {from: admin});
 
-        await expectRevert(this.rewards.reward(admin, toTokenAmount(1000), {from: bob}), 'Not allowed');
-        await expectRevert(this.rewards.reward(admin, toTokenAmount(1000), {from: alice}), 'Not allowed');
-        await expectRevert(this.rewards.reward(admin, toTokenAmount(1000), {from: carol}), 'Not allowed');
+        await expectRevert(this.rewards.reward(admin, toTokenAmount(1000), LEVERAGE, {from: bob}), 'Not allowed');
+        await expectRevert(this.rewards.reward(admin, toTokenAmount(1000), LEVERAGE, {from: alice}), 'Not allowed');
+        await expectRevert(this.rewards.reward(admin, toTokenAmount(1000), LEVERAGE, {from: carol}), 'Not allowed');
 
-        await this.rewards.reward(bob, toTokenAmount(1000), {from: admin});
-        await this.rewards.reward(alice, toTokenAmount(1000), {from: admin});
-        await this.rewards.reward(admin, toTokenAmount(1000), {from: admin});
+        await this.rewards.reward(bob, toTokenAmount(1000), LEVERAGE, {from: admin});
+        await this.rewards.reward(alice, toTokenAmount(1000), LEVERAGE, {from: admin});
+        await this.rewards.reward(admin, toTokenAmount(1000), LEVERAGE, {from: admin});
     });
 
     it('reverts when caliming reward and platform is not set', async () => {
@@ -206,7 +194,7 @@ describe('PositionRewards', () => {
     it('claims correct amount after openning, closing and openning another position on the same day', async () => {
         await transferRewardTokens(toTokenAmount(1000000));
 
-        await this.platform.setBuyersLockupPeriod(0, {from: admin});
+        await this.platform.setLockupPeriods(0, 0, {from: admin});
 
         await setPlatform();
         await depositToPlatform(toTokenAmount(20000));
@@ -222,7 +210,7 @@ describe('PositionRewards', () => {
     it('claims correct amount after position was merged after claiming while opened', async () => {
         await transferRewardTokens(toTokenAmount(1000000));
 
-        await this.platform.setBuyersLockupPeriod(0, {from: admin});
+        await this.platform.setLockupPeriods(0, 0, {from: admin});
 
         await setPlatform();
         await depositToPlatform(toTokenAmount(50000));
@@ -234,12 +222,12 @@ describe('PositionRewards', () => {
         const {positionUnits: positionUnits2, positionTimestamp: positionTimestamp2} = await openPosition(toTokenAmount(2000), bob);
         await time.increase(SECONDS_PER_DAY);
 
-        await claimAndValidate(bob, positionUnits2, positionTimestamp2);
+        await claimAndValidate(bob, positionUnits2.sub(positionUnits), positionTimestamp2);
 
         const {positionUnits: positionUnits3, positionTimestamp: positionTimestamp3} = await openPosition(toTokenAmount(3000), bob);
         await time.increase(SECONDS_PER_DAY);
 
-        await claimAndValidate(bob, positionUnits3, positionTimestamp3);
+        await claimAndValidate(bob, positionUnits3.sub(positionUnits2), positionTimestamp3);
     });
 
     it('claims correct amount after position was partially closed', async () => {
@@ -294,7 +282,7 @@ describe('PositionRewards', () => {
 
         await setPlatform();
         await depositToPlatform(toTokenAmount(50000));
-        const {positionUnits, positionTimestamp} = await openPosition(toTokenAmount(1000), bob);
+        const {positionTimestamp} = await openPosition(toTokenAmount(1000), bob);
 
         await time.increaseTo(positionTimestamp.add(new BN(30 * SECONDS_PER_DAY + 1)));
         await expectRevert(this.rewards.claimReward({from: bob}), 'Claim too late');
@@ -302,7 +290,7 @@ describe('PositionRewards', () => {
         const {positionUnits: positionUnits2, positionTimestamp: positionTimestamp2} = await openPosition(toTokenAmount(2000), bob);
 
         await time.increaseTo(positionTimestamp2.add(new BN(SECONDS_PER_DAY * 30 - 2)));
-        await claimAndValidate(bob, positionUnits.add(positionUnits2), positionTimestamp2);
+        await claimAndValidate(bob, positionUnits2, positionTimestamp2);
     });
 
     it('calculates max claim time possible by latest merge time', async () => {
@@ -310,7 +298,7 @@ describe('PositionRewards', () => {
 
         await setPlatform();
         await depositToPlatform(toTokenAmount(50000));
-        const {positionUnits} = await openPosition(toTokenAmount(1000), bob);
+        await openPosition(toTokenAmount(1000), bob);
 
         await time.increase(30 * SECONDS_PER_DAY + 1);
         await expectRevert(this.rewards.claimReward({from: bob}), 'Claim too late');
@@ -319,7 +307,7 @@ describe('PositionRewards', () => {
 
         await time.increase(SECONDS_PER_DAY);
 
-        await claimAndValidate(bob, positionUnits.add(positionUnits2), positionTimestamp2);
+        await claimAndValidate(bob, positionUnits2, positionTimestamp2);
 
         await time.increaseTo(positionTimestamp2.add(new BN(30 * SECONDS_PER_DAY + 1)));
         await expectRevert(this.rewards.claimReward({from: bob}), 'Claim too late');
@@ -329,20 +317,20 @@ describe('PositionRewards', () => {
         await transferRewardTokens(toTokenAmount(1000000));
 
         await setPlatform();
-        await depositToPlatform(toUSDT(4000000));
+        await depositToPlatform(toTokenAmount(4000000));
 
         const amounts = [10, 100, 500, 1000, 5000, 10000, 20000, 25000, 30000, 40000, 50000, 100000, 500000, 1000000];
         const MAX_REWARD_PERC = 10;
         for(const amount of amounts) {
             print(`Opening a position of size:${amount} USDT`);
-            const {positionUnits, positionTimestamp} = await openPosition(toUSDT(amount), bob);
+            const {positionUnits, positionTimestamp} = await openPosition(toTokenAmount(amount).div(new BN(1000)), bob);
 
             await time.increase(SECONDS_PER_DAY);
 
             const claimed = await claimAndValidate(bob, positionUnits, positionTimestamp);
             const claimedTokens = claimed.div(new BN('1000000000000000000'));
             const maxExpectedReward = new BN(amount).mul(new BN(MAX_REWARD_PERC)).div(new BN(100));
-            // console.log(`positionUnits:${positionUnits.toString()} maxExpected:${maxExpectedReward.toString()} claimed:${claimed.toString()} (${claimedTokens.toString()} GOVI)`);
+            print(`positionUnits:${positionUnits.toString()} maxExpected:${maxExpectedReward.toString()} claimed:${claimed.toString()} (${claimedTokens.toString()} GOVI)`);
             expect(claimedTokens).to.be.bignumber.below(new BN(amount).mul(new BN(MAX_REWARD_PERC)).div(new BN(100)));
             await this.platform.closePosition(positionUnits, new BN(CVI_VALUE), {from: bob});
             print(`${amount},${Number(claimedTokens.toString())}`);
@@ -376,6 +364,7 @@ describe('PositionRewards', () => {
             const currReward = await claimAndValidate(bob, positionUnits, positionTimestamp);
             expect(currReward).is.bignumber.gte(lastReward);
             lastReward = currReward;
+            await this.platform.closePosition(positionUnits, new BN(CVI_VALUE), {from: bob});
         }
     });
 
@@ -390,6 +379,7 @@ describe('PositionRewards', () => {
             const {positionUnits, positionTimestamp} = await openPosition(toTokenAmount(1000), bob);
             await time.increase(currTime);
             await claimAndValidate(bob, positionUnits, positionTimestamp);
+            await this.platform.closePosition(positionUnits, new BN(CVI_VALUE), {from: bob});
         }
     });
 
@@ -418,14 +408,14 @@ describe('PositionRewards', () => {
         await expectRevert(this.rewards.claimReward({from: alice}), 'No opened position');
     });
 
-    it('keeps track of caliming per account', async () => {
+    it('keeps track of claiming per account', async () => {
         await transferRewardTokens(toTokenAmount(1000000));
 
         await setPlatform();
         await depositToPlatform(toTokenAmount(50000));
 
         const {positionUnits: bobPositionUnits, positionTimestamp: bobPositionTimetamp} = await openPosition(toTokenAmount(1000), bob);
-        const {positionUnits: alicePositionUnits1} = await openPosition(toTokenAmount(2000), alice);
+        await openPosition(toTokenAmount(2000), alice);
 
         await time.increase(SECONDS_PER_DAY);
 
@@ -436,7 +426,7 @@ describe('PositionRewards', () => {
         await claimAndValidate(bob, bobPositionUnits, bobPositionTimetamp);
         await expectRevert(this.rewards.claimReward({from: bob}), 'No reward');
 
-        await claimAndValidate(alice, alicePositionUnits1.add(alicePositionUnits2), alicePositionTimestamp);
+        await claimAndValidate(alice, alicePositionUnits2, alicePositionTimestamp);
         await expectRevert(this.rewards.claimReward({from: alice}), 'No reward');
 
         const {positionUnits: carolPositionUnits, positionTimestamp: carolPositionTimestamp} = await openPosition(toTokenAmount(3000), carol);
@@ -447,7 +437,7 @@ describe('PositionRewards', () => {
         await claimAndValidate(carol, carolPositionUnits, carolPositionTimestamp);
         await expectRevert(this.rewards.claimReward({from: carol}), 'No reward');
 
-        await claimAndValidate(bob, bobPositionUnits2, bobPositionTimetamp2);
+        await claimAndValidate(bob, bobPositionUnits2.sub(bobPositionUnits), bobPositionTimetamp2);
         await expectRevert(this.rewards.claimReward({from: bob}), 'No reward');
     });
 
@@ -477,7 +467,7 @@ describe('PositionRewards', () => {
 
         const {positionUnits: bobPositionUnits2, positionTimestamp: bobPositionTimetamp2} = await openPosition(toTokenAmount(500), bob);
         await time.increase(SECONDS_PER_DAY);
-        await claimAndValidate(bob, bobPositionUnits2, bobPositionTimetamp2);
+        await claimAndValidate(bob, bobPositionUnits2.sub(bobPositionUnits), bobPositionTimetamp2);
     });
 
     it('reverts when not called by allowed caller', async () => {
@@ -505,7 +495,7 @@ describe('PositionRewards', () => {
         for (let gain of gains) {
             await this.rewards.setMaxRewardTimePercentageGain(gain, {from: admin});
             expect(await this.rewards.maxRewardTimePercentageGain()).to.be.bignumber.equal(gain);
-            await rewardAndValidate(bob, toUSDT(100), MAX_LINEAR_POSITION_UNITS, MAX_LINEAR_GOVI, MAX_SINGLE_REWARD, MAX_REWARD_TIME, gain);
+            await rewardAndValidate(bob, toUSDT(1000), MAX_LINEAR_POSITION_UNITS, MAX_LINEAR_GOVI, MAX_SINGLE_REWARD, MAX_REWARD_TIME, gain);
             await rewardAndValidate(bob, toUSDT(30000), MAX_LINEAR_POSITION_UNITS, MAX_LINEAR_GOVI, MAX_SINGLE_REWARD, MAX_REWARD_TIME, gain);
         }
     });
@@ -572,7 +562,7 @@ describe('PositionRewards', () => {
         const {positionUnits: davePositionUnits, positionTimestamp: davePositionTimestamp} = await openPosition(toTokenAmount(50), dave);
 
         await time.increaseTo(setParametersTimestamp.add(new BN(SECONDS_PER_DAY * 30 - 1)));
-        await claimAndValidate(bob, bobPositionUnits2, bobPositionTimestamp2, MAX_LINEAR_POSITION_UNITS.div(new BN(2)), MAX_LINEAR_GOVI.div(new BN(2)));
+        await claimAndValidate(bob, bobPositionUnits2.sub(bobPositionUnits), bobPositionTimestamp2, MAX_LINEAR_POSITION_UNITS.div(new BN(2)), MAX_LINEAR_GOVI.div(new BN(2)));
 
         await time.increaseTo(setParametersTimestamp.add(new BN(SECONDS_PER_DAY * 30 + 1)));
         await claimAndValidate(carol, carolPositionUnits, carolPositionTimestamp, MAX_LINEAR_POSITION_UNITS.mul(new BN(2)), MAX_LINEAR_GOVI.mul(new BN(2)), MAX_SINGLE_REWARD.div(new BN(2)));
@@ -598,7 +588,7 @@ describe('PositionRewards', () => {
         await transferRewardTokens(toTokenAmount(1000000));
 
         await setPlatform();
-        await this.platform.setRewards(ZERO_ADDRESS, {from: admin});
+        await setRewards(ZERO_ADDRESS, {from: admin});
 
         await depositToPlatform(toTokenAmount(20000));
         await openPosition(toTokenAmount(1000), bob);
@@ -611,7 +601,7 @@ describe('PositionRewards', () => {
         await expectRevert(this.rewards.claimReward({from: alice}), 'No reward');
         await expectRevert(this.rewards.claimReward({from: admin}), 'No reward');
 
-        await this.platform.setRewards(this.rewards.address, {from: admin});
+        await setRewards(this.rewards.address, {from: admin});
         await openPosition(toTokenAmount(1000), bob);
 
         await time.increase(SECONDS_PER_DAY);
@@ -717,8 +707,8 @@ describe('PositionRewards', () => {
     it('allows setting rewarder properly', async () => {
         await this.rewards.setRewarder(alice, {from: admin});
         expect(await this.rewards.rewarder()).to.equal(alice);
-        await expectRevert(this.rewards.reward(carol, toTokenAmount(1000), {from: bob}), 'Not allowed');
-        await this.rewards.reward(carol, toTokenAmount(1000), {from: alice});
+        await expectRevert(this.rewards.reward(carol, toTokenAmount(1000),  LEVERAGE, {from: bob}), 'Not allowed');
+        await this.rewards.reward(carol, toTokenAmount(1000),  LEVERAGE, {from: alice});
     });
 
     it('allows setting daily max reward properly', async () => {
@@ -800,7 +790,7 @@ describe('PositionRewards', () => {
         expect(await this.rewards.platform()).to.equal(fakePlatform.address);
 
         await this.rewards.setRewarder(admin, {from: admin});
-        await this.rewards.reward(bob, toTokenAmount(2000), {from: admin});
+        await this.rewards.reward(bob, toTokenAmount(2000), LEVERAGE, {from: admin});
 
         await time.increase(SECONDS_PER_DAY);
 
@@ -856,7 +846,7 @@ describe('PositionRewards', () => {
         await this.rewards.setPlatform(fakePlatform.address, {from: admin});
 
         await this.rewards.setRewarder(admin, {from: admin});
-        await this.rewards.reward(bob, toBN(1, 35), {from: admin});
+        await this.rewards.reward(bob, toBN(1, 35), LEVERAGE, {from: admin});
 
         await time.increase(SECONDS_PER_DAY);
 
@@ -864,12 +854,12 @@ describe('PositionRewards', () => {
         expect(reward).to.be.bignumber.lte(MAX_SINGLE_REWARD);
     });
 
-    it('helper returns correct rewards', async () => {
+    it('returns correct rewards', async () => {
         const positionUnits = toTokenAmount(1000);
 
         const openTimestamp = await time.latest();
         await time.increase(SECONDS_PER_DAY);
-        const reward = await this.positionRewardsHelper.calculatePositionReward(positionUnits, openTimestamp);
+        const reward = await this.rewards.calculatePositionReward(positionUnits, openTimestamp);
         const rewardTimestamp = await time.latest();
 
         const expectedReward = calculateReward(positionUnits, rewardTimestamp.sub(openTimestamp));
@@ -877,14 +867,14 @@ describe('PositionRewards', () => {
         expect(reward).to.be.bignumber.equal(expectedReward);
     });
 
-    it('helper returns minimum after raising rewards', async () => {
+    it('returns minimum after raising rewards', async () => {
         await this.rewards.setRewardCalculationParameters(MAX_SINGLE_REWARD.mul(new BN(2)), MAX_LINEAR_POSITION_UNITS, MAX_LINEAR_GOVI, {from: admin});
 
         const positionUnits = toTokenAmount(1000);
 
         const openTimestamp = await time.latest();
         await time.increase(SECONDS_PER_DAY);
-        const reward = await this.positionRewardsHelper.calculatePositionReward(positionUnits, openTimestamp);
+        const reward = await this.rewards.calculatePositionReward(positionUnits, openTimestamp);
         const rewardTimestamp = await time.latest();
 
         const expectedReward = calculateReward(positionUnits, rewardTimestamp.sub(openTimestamp));
@@ -892,14 +882,14 @@ describe('PositionRewards', () => {
         expect(reward).to.be.bignumber.equal(expectedReward);
     });
 
-    it('helper returns minimum after lowering rewards', async () => {
+    it('returns minimum after lowering rewards', async () => {
         await this.rewards.setRewardCalculationParameters(MAX_SINGLE_REWARD.div(new BN(2)), MAX_LINEAR_POSITION_UNITS, MAX_LINEAR_GOVI, {from: admin});
 
         const positionUnits = toTokenAmount(1000);
 
         const openTimestamp = await time.latest();
         await time.increase(SECONDS_PER_DAY);
-        const reward = await this.positionRewardsHelper.calculatePositionReward(positionUnits, openTimestamp);
+        const reward = await this.rewards.calculatePositionReward(positionUnits, openTimestamp);
         const rewardTimestamp = await time.latest();
 
         const expectedReward = calculateReward(positionUnits, rewardTimestamp.sub(openTimestamp), MAX_LINEAR_POSITION_UNITS, MAX_LINEAR_GOVI, MAX_SINGLE_REWARD.div(new BN(2)));
