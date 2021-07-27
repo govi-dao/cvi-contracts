@@ -12,15 +12,15 @@ contract CVIOracle is ICVIOracle, Ownable {
     uint256 private constant CVI_DECIMALS_TRUNCATE = 1e16;
 
     AggregatorV3Interface public immutable cviAggregator;
-    AggregatorV3Interface public cviSanityAggregator;
+    AggregatorV3Interface public cviDeviationAggregator;
     bool public deviationCheck = false;
     uint16 public maxDeviation = 1000;
 
     uint256 public maxCVIValue;
 
-    constructor(AggregatorV3Interface _cviAggregator, AggregatorV3Interface _cviSanityAggregator, uint256 _maxCVIValue) {
+    constructor(AggregatorV3Interface _cviAggregator, AggregatorV3Interface _cviDeviationAggregator, uint256 _maxCVIValue) {
     	cviAggregator = _cviAggregator;
-        cviSanityAggregator = _cviSanityAggregator;
+        cviDeviationAggregator = _cviDeviationAggregator;
         maxCVIValue = _maxCVIValue;
     }
 
@@ -35,12 +35,12 @@ contract CVIOracle is ICVIOracle, Ownable {
         uint16 truncatedCVIOracleValue = getTruncatedCVIValue(cviOracleValue);
 
         if (deviationCheck) {
-            (, int256 cviSanityOracleValue,,,) = cviSanityAggregator.latestRoundData();
-            uint16 truncatedCVISanityOracleValue = getTruncatedCVIValue(cviSanityOracleValue);
+            (, int256 cviDeviationOracleValue,,,) = cviDeviationAggregator.latestRoundData();
+            uint16 truncatedCVIDeviationOracleValue = getTruncatedCVIValue(cviDeviationOracleValue);
 
-            uint256 deviation = truncatedCVISanityOracleValue > truncatedCVIOracleValue ? truncatedCVISanityOracleValue - truncatedCVIOracleValue : truncatedCVIOracleValue - truncatedCVISanityOracleValue;
+            uint256 deviation = truncatedCVIDeviationOracleValue > truncatedCVIOracleValue ? truncatedCVIDeviationOracleValue - truncatedCVIOracleValue : truncatedCVIOracleValue - truncatedCVIDeviationOracleValue;
 
-            require(deviation * PRECISION_DECIMALS / truncatedCVISanityOracleValue <= maxDeviation, "Deviation too large");
+            require(deviation * PRECISION_DECIMALS / truncatedCVIDeviationOracleValue <= maxDeviation, "Deviation too large");
         }
 
         return (truncatedCVIOracleValue, oracleRoundId, oracleTimestamp);

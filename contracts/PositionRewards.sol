@@ -116,7 +116,7 @@ contract PositionRewards is IPositionRewards, IRewardsCollector, Ownable {
     function claimReward() external override {
         require(address(platform) != address(0), "Platform not set");
 
-        (uint256 positionUnitsAmount,,, uint256 creationTimestamp,) = platform.positions(msg.sender);
+        (uint256 positionUnitsAmount, uint8 leverage,, uint256 creationTimestamp,) = platform.positions(msg.sender);
         require(positionUnitsAmount > 0, "No opened position");
         require(block.timestamp <= creationTimestamp + maxClaimPeriod, "Claim too late");
 
@@ -127,8 +127,8 @@ contract PositionRewards is IPositionRewards, IRewardsCollector, Ownable {
         // Reward position units will be the min from currently open and currently available
         // This resolves the issue of claiming after a merge
         uint256 rewardPositionUnits = unclaimedPositionUnits[msg.sender];
-        if (positionUnitsAmount < rewardPositionUnits) {
-            rewardPositionUnits = positionUnitsAmount;
+        if (positionUnitsAmount / leverage < rewardPositionUnits) {
+            rewardPositionUnits = positionUnitsAmount / leverage;
         }
 
         require(rewardPositionUnits > 0, "No reward");

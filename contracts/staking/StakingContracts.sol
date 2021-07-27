@@ -56,3 +56,12 @@ contract GOVIETHSLPStakingRewards is StakingRewards {
         address _stakingToken
     ) StakingRewards(_owner, _rewardsDistribution, _rewardsToken, _stakingToken) {}
 }
+
+contract USDCLPStakingRewards is StakingRewards {
+    constructor(
+        address _owner,
+        address _rewardsDistribution,
+        address _rewardsToken,
+        address _stakingToken
+    ) StakingRewards(_owner, _rewardsDistribution, _rewardsToken, _stakingToken) {}
+}
