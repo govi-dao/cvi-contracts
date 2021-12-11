@@ -1,11 +1,10 @@
 const chai = require('chai');
 const expect = chai.expect;
 
-const {accounts} = require('@openzeppelin/test-environment');
 const {expectRevert, expectEvent, time, BN, balance} = require('@openzeppelin/test-helpers');
-const {getContracts} = require('./DeployUtils.js');
+const { getContracts, getAccounts } = require('./DeployUtils.js');
 const {toBN} = require('./BNUtils.js');
-const {calculateSingleUnitFee, calculateNextAverageTurbulence, calculatePremiumFee} = require('./FeesUtils.js');
+const {calculateSingleUnitFee, calculateNextAverageTurbulence, calculatePremiumFee, calculateClosePositionFeePercent, TIME_WINDOW, MID_VOLUME_FEE, MAX_CLOSE_VOLUME_FEE} = require('./FeesUtils.js');
 const { print } = require('./DebugUtils');
 
 const PRECISION_DECIMALS = toBN(1, 10);
@@ -13,12 +12,24 @@ const MAX_FEE = new BN(10000);
 const HEARTBEAT = new BN(55 * 60);
 const GAS_PRICE = toBN(1, 10);
 
+const MIN_PREMIUM_COLLATERLA_FEE = 6500;
+
+const MAX_FEE_DELTA_COLLATERAL = new BN(400);
+
 const LIQUIDATION_MIN_REWARD_PERCENTAGE = toBN(5);
 const LEVERAGE_TO_THRESHOLD = [new BN(50), new BN(50), new BN(100), new BN(100), new BN(150), new BN(150), new BN(200), new BN(200)];
 const LIQUIDATION_MAX_FEE_PERCENTAGE = new BN(1000);
 const LEVERAGE_TO_MAX = [new BN(30), new BN(30), new BN(30), new BN(30), new BN(30), new BN(30), new BN(30), new BN(30)];
 
-const [admin] = accounts;
+const ALL_FEES = 0;
+const ONLY_COLLATERAL_PREMIUM = 1;
+const NO_FEES = 2;
+
+let admin;
+
+const setAccounts = async () => {
+    [admin] = await getAccounts();
+};
 
 const getBNFee = (bigNumber, fee) => {
     return bigNumber.mul(fee).div(MAX_FEE);
@@ -28,42 +39,13 @@ const getFee = (amount, fee) => {
     return getBNFee(toBN(amount), fee);
 };
 
-const verifyPositionEvent = (event, eventName, sender, tokenAmount, positionUnitsAmount, cviValue, feesAmount) => {
-    expect(event.event).to.equal(eventName);
-    expect(event.address).to.equal(getContracts().platform.address);
-    expect(event.args.account).to.equal(sender);
-    expect(event.args.tokenAmount).to.be.bignumber.equal(tokenAmount);
-    expect(event.args.feeAmount).to.be.bignumber.equal(feesAmount);
-    expect(event.args.positionUnitsAmount).to.be.bignumber.equal(positionUnitsAmount);
-    expect(event.args.cviValue).to.be.bignumber.equal(new BN(cviValue));
+const getAccountBalance = async account => {
+    return getContracts().isETH ? await balance.current(account, 'wei') : await getContracts().token.balanceOf(account);
 };
 
-const verifyOpenPositionEvent = (event, sender, tokenAmount, positionUnitsAmount, cviValue, feesAmount) => {
-    verifyPositionEvent(event, 'OpenPosition', sender, tokenAmount, positionUnitsAmount, cviValue, feesAmount);
-};
-
-const verifyClosePositionEvent = (event, sender, tokenAmount, positionUnitsAmount, cviValue, feesAmount) => {
-    verifyPositionEvent(event, 'ClosePosition', sender, tokenAmount, positionUnitsAmount, cviValue, feesAmount);
-};
-
-const verifyDepositEvent = async (event, sender, tokenAmount) => {
-    const depositFees = await getContracts().feesCalculator.depositFeePercent();
-
-    expect(event.event).to.equal('Deposit');
-    expect(event.address).to.equal(getContracts().platform.address);
-    expect(event.args.tokenAmount).to.be.bignumber.equal(tokenAmount);
-    expect(event.args.feeAmount).to.be.bignumber.equal(tokenAmount.mul(depositFees).div(MAX_FEE));
-    expect(event.args.account).to.equal(sender);
-};
-
-const verifyWithdrawEvent = async (event, sender, tokenAmount) => {
-    const withdrawFees = await getContracts().feesCalculator.withdrawFeePercent();
-
-    expect(event.event).to.equal('Withdraw');
-    expect(event.address).to.equal(getContracts().platform.address);
-    expect(event.args.tokenAmount).to.be.bignumber.equal(tokenAmount);
-    expect(event.args.feeAmount).to.be.bignumber.equal(tokenAmount.mul(withdrawFees).div(MAX_FEE));
-    expect(event.args.account).to.equal(sender);
+const getFeesBalance = async feesCollector => {
+    return (getContracts().isETH ? await balance.current(feesCollector.address, 'wei') :
+        await feesCollector.getProfit());
 };
 
 const createState = accountsUsed => {
@@ -85,26 +67,33 @@ const createState = accountsUsed => {
         latestRound: undefined,
         latestSnapshotTimestamp: undefined,
         turbulence: new BN(0),
+        adjustedTimestamp: new BN(0),
+        closeAdjustedTimestamp: new BN(0),
         lpBalances
     };
 };
 
-const calculateBalance = async state => {
+const subtractTotalPositionUnits = (state, positionUnits, fundingFees) => {
+    state.totalPositionUnits = state.totalPositionUnits.sub(positionUnits);
+    if (state.totalPositionUnits.eq(new BN(0))) {
+        state.totalFundingFees = new BN(0);
+    } else {
+        state.totalFundingFees = state.totalFundingFees.sub(fundingFees);    
+    }
+}
+
+const calculateBalance = async (state, totalFundingFees) => {
     const cviValue = (await getContracts().fakeOracle.getCVILatestRoundData()).cviValue;
-    return state.sharedPool.sub(state.totalPositionUnits.mul(cviValue).div(getContracts().maxCVIValue)).add(state.totalFundingFees);
+    return state.sharedPool.sub(state.totalPositionUnits.mul(cviValue).div(getContracts().maxCVIValue)).add(totalFundingFees === undefined ? state.totalFundingFees : totalFundingFees);
 };
 
 const validateLPState = async state => {
-    const feesBalance = getContracts().isETH ? await balance.current(getContracts().fakeFeesCollector.address, 'wei') :
-        await getContracts().fakeFeesCollector.getProfit();
+    const feesBalance = await getFeesBalance(getContracts().fakeFeesCollector);
     expect(feesBalance).to.be.bignumber.equal(state.totalFeesSent);
     expect(await getContracts().platform.totalSupply()).to.be.bignumber.equal(state.lpTokensSupply);
 
-    const contractBalance = getContracts().isETH ? await balance.current(getContracts().platform.address, 'wei') :
-        await getContracts().token.balanceOf(getContracts().platform.address);
+    const contractBalance = await getAccountBalance(getContracts().platform.address);
 
-    //console.log('shared pool', state.sharedPool.toString());
-    //console.log('total margin', state.totalMarginDebt.toString());
     expect(contractBalance).to.be.bignumber.equal(state.sharedPool.sub(state.totalMarginDebt));
 
     const totalLeveragedTokens = await getContracts().platform.totalLeveragedTokensAmount();
@@ -119,16 +108,22 @@ const validateLPState = async state => {
 
     expect(await getContracts().feesCalculator.turbulenceIndicatorPercent()).to.be.bignumber.equal(state.turbulence);
 
+    expect(await getContracts().feesCalculator.adjustedVolumeTimestamp()).to.be.bignumber.equal(state.adjustedTimestamp);
+    expect(await getContracts().feesCalculator.closeAdjustedVolumeTimestamp()).to.be.bignumber.equal(state.closeAdjustedTimestamp);
+
     const totalBalance = await calculateBalance(state);
-    expect(await getContracts().platform.totalBalance()).to.be.bignumber.equal(totalBalance);
+    expect(await getContracts().platform.totalBalance(false)).to.be.bignumber.equal(totalBalance);
 };
 
 const updateSnapshots = async (state, saveSnapshot = true) => {
     const latestTimestamp = await time.latest();
     const timestamp = latestTimestamp.toNumber();
 
+    let turbulence = state.turbulence;
+    let totalFundingFees = state.totalFundingFees;
+
     if (state.snapshots[timestamp] !== undefined) {
-        return {latestTimestamp, snapshot: state.snapshots[timestamp]};
+        return {latestTimestamp, snapshot: state.snapshots[timestamp], latestCVIRound: state.latestRound, totalFundingFees, turbulence};
     }
 
     const latestCVIRound = (await getContracts().fakeOracle.getCVILatestRoundData()).cviRoundId.toNumber();
@@ -156,13 +151,15 @@ const updateSnapshots = async (state, saveSnapshot = true) => {
                 calculateSingleUnitFee(currCVIValue, timestamp - currTimestamp));
             nextSnapshot = nextSnapshot.add(fundingFeesPerUnit);
 
+            turbulence = calculateNextAverageTurbulence(state.turbulence, new BN(currTimestamp - lastTimestamp), HEARTBEAT, latestCVIRound - state.latestRound, new BN(lastCVI), new BN(currCVIValue));
             if (saveSnapshot) {
-                state.turbulence = calculateNextAverageTurbulence(state.turbulence, new BN(currTimestamp - lastTimestamp), HEARTBEAT, latestCVIRound - state.latestRound, new BN(lastCVI), new BN(currCVIValue));
+                state.turbulence = turbulence;
             }
         }
 
+        totalFundingFees = totalFundingFees.add(fundingFeesPerUnit.mul(state.totalPositionUnits).div(PRECISION_DECIMALS));
         if (saveSnapshot) {
-            state.totalFundingFees = state.totalFundingFees.add(fundingFeesPerUnit.mul(state.totalPositionUnits).div(PRECISION_DECIMALS));
+            state.totalFundingFees = totalFundingFees;
         }
 
         snapshot = nextSnapshot;
@@ -174,7 +171,7 @@ const updateSnapshots = async (state, saveSnapshot = true) => {
         state.snapshots[timestamp] = snapshot;
     }
 
-    return {latestTimestamp, snapshot};
+    return {latestTimestamp, snapshot, latestCVIRound, totalFundingFees, turbulence};
 };
 
 const calculateFundingFees = (state, currTime, account, positionUnitsAmount) => {
@@ -187,12 +184,26 @@ const calculateFundingFeesWithSnapshot = (state, currSnapshot, account, position
     return (currSnapshot.sub(state.snapshots[position.creationTimestamp.toNumber()]).mul(positionUnitsAmount).div(PRECISION_DECIMALS));
 };
 
-const calculateEntirePositionBalance = async (state, account) => {
+const calculateFundingFeesWithTwoSnapshots = (prevSnapshot, currSnapshot, positionUnitsAmount) => {
+    return (currSnapshot.sub(prevSnapshot).mul(positionUnitsAmount).div(PRECISION_DECIMALS));
+}
+
+const calculateMarginDebt = (state, account) => {
+    return state.positions[account].positionUnitsAmount.mul(state.positions[account].openCVIValue).mul(state.positions[account].leverage.sub(new BN(1))) .div(getContracts().maxCVIValue).div(state.positions[account].leverage);
+};
+
+const calculateEntirePositionBalance = async (state, account, snapshot) => {
     const cviValue = (await getContracts().fakeOracle.getCVILatestRoundData()).cviValue;
     const position = state.positions[account];
-    const {snapshot} = await updateSnapshots(state, false);
-    const fundingFees = calculateFundingFeesWithSnapshot(state, snapshot, account, position.positionUnitsAmount);
-    const marginDebt = state.positions[account].positionUnitsAmount.mul(state.positions[account].openCVIValue).mul(state.positions[account].leverage.sub(new BN(1))) .div(getContracts().maxCVIValue).div(state.positions[account].leverage);
+
+    let updatedSnapshot = snapshot;
+    if (updatedSnapshot === undefined) {
+        updatedSnapshot = (await updateSnapshots(state, false)).snapshot;
+    }
+
+    const fundingFees = calculateFundingFeesWithSnapshot(state, updatedSnapshot, account, position.positionUnitsAmount);
+    const marginDebt = calculateMarginDebt(state, account);
+
     const positionBalancePositive = state.positions[account].positionUnitsAmount.mul(cviValue).div(getContracts().maxCVIValue);
     const positionBalanceNegative = fundingFees.add(marginDebt);
 
@@ -215,6 +226,7 @@ const isLiquidable = (positionBalance, isPositive, position) => {
 
 const calculateLiquidationCVI = async (state, account) => {
     const {positionBalance, isPositive} = await calculateEntirePositionBalance(state, account);
+
     const position = state.positions[account];
 
     const {liquidable, liquidationBalance} = isLiquidable(positionBalance, isPositive, position);
@@ -233,7 +245,7 @@ const calculateLiquidationCVI = async (state, account) => {
     }
 };
 
-const calculateLiquidationDays = async (state, account, cviValue) => {
+const calculateLiquidationDays = async (state, account, cviValue, negativeOnly = false) => {
     const {positionBalance, isPositive} = await calculateEntirePositionBalance(state, account);
     const position = state.positions[account];
 
@@ -241,31 +253,26 @@ const calculateLiquidationDays = async (state, account, cviValue) => {
     if (liquidable) {
         return null;
     } else {
-        const leftToLose = positionBalance.sub(liquidationBalance);
+        const leftToLose = negativeOnly ? positionBalance : positionBalance.sub(liquidationBalance);
 
         const singlePositionUnitDaiilyFee = calculateSingleUnitFee(cviValue, 3600 * 24);
-        console.log(singlePositionUnitDaiilyFee.toString());
-        console.log(position.positionUnitsAmount.toString());
         const daiilyFundingFee = position.positionUnitsAmount.mul(singlePositionUnitDaiilyFee).div(toBN(1, 10));
 
-        console.log('daily funding fee', daiilyFundingFee.toString());
-
         const daysBeforeLiquidation = leftToLose.div(daiilyFundingFee).add(new BN(1));
-
-        console.log('days until liquidation', daysBeforeLiquidation.toString());
 
         return daysBeforeLiquidation;
     }
 };
 
-const getLiquidationReward = async (positionBalance, isPositive, position) => {
+const getLiquidationReward = (positionBalance, isPositive, position) => {
     const positionUnitsAmount = position.positionUnitsAmount;
     const openCVIValue = position.openCVIValue;
     const leverage = position.leverage;
 
-    const balance = positionUnitsAmount.mul(new BN(openCVIValue)).div(getContracts().maxCVIValue).div(position.leverage);
+    const balance = positionUnitsAmount.mul(new BN(openCVIValue)).div(getContracts().maxCVIValue).sub(
+        positionUnitsAmount.mul(new BN(openCVIValue)).div(getContracts().maxCVIValue).mul(leverage.sub(new BN(1))).div(position.leverage));
 
-    if (!isPositive || toBN(positionBalance) < balance.mul(LIQUIDATION_MIN_REWARD_PERCENTAGE).div(LIQUIDATION_MAX_FEE_PERCENTAGE)) {
+    if (!isPositive || toBN(positionBalance).lt(balance.mul(LIQUIDATION_MIN_REWARD_PERCENTAGE).div(LIQUIDATION_MAX_FEE_PERCENTAGE))) {
         return toBN(balance.mul(LIQUIDATION_MIN_REWARD_PERCENTAGE).div(LIQUIDATION_MAX_FEE_PERCENTAGE));
     }
 
@@ -277,8 +284,8 @@ const getLiquidationReward = async (positionBalance, isPositive, position) => {
     return balance.mul(LEVERAGE_TO_MAX[leverage.toNumber() - 1]).div(LIQUIDATION_MAX_FEE_PERCENTAGE);
 };
 
-const calculateLPTokens = async (state, tokens) => {
-    const balance = await calculateBalance(state);
+const calculateLPTokens = async (state, tokens, totalFundingFees) => {
+    const balance = await calculateBalance(state, totalFundingFees);
 
     if (balance.eq(new BN(0)) || state.lpTokensSupply.eq(new BN(0))) {
         return tokens.mul(getContracts().initialRate);
@@ -287,33 +294,48 @@ const calculateLPTokens = async (state, tokens) => {
     return tokens.mul(state.lpTokensSupply).div(balance);
 };
 
-const calculateDepositAmounts = async (state, amount) => {
+const calculateDepositAmounts = async (state, amount, totalFundingFees) => {
     const depositFees = await getContracts().feesCalculator.depositFeePercent();
 
     const depositTokens = new BN(amount);
     const depositTokenFees = getFee(amount, depositFees);
     const depositTokenMinusFees = depositTokens.sub(depositTokenFees);
-    const lpTokens = await calculateLPTokens(state, depositTokenMinusFees);
+    const lpTokens = await calculateLPTokens(state, depositTokenMinusFees, totalFundingFees);
     return { depositTokens, depositTokenFees, depositTokenMinusFees, lpTokens };
 };
 
-const calculateWithdrawAmounts = async (state, amount) => {
+const calculateWithdrawAmounts = async (state, amount, totalFundingFees) => {
     const withdrawFees = await getContracts().feesCalculator.withdrawFeePercent();
 
     const withdrawTokens = new BN(amount);
     const withdrawTokenFees = getFee(amount, withdrawFees);
     const withdrawTokenMinusFees = withdrawTokens.sub(withdrawTokenFees);
 
-    const burnedLPTokens = withdrawTokens.mul(state.lpTokensSupply).sub(new BN(1)).div(await calculateBalance(state)).add(new BN(1));
+    const burnedLPTokens = withdrawTokens.mul(state.lpTokensSupply).sub(new BN(1)).div(await calculateBalance(state, totalFundingFees)).add(new BN(1));
 
     return { withdrawTokens, withdrawTokenFees, withdrawTokenMinusFees, burnedLPTokens };
 };
 
-const calculateTokensByBurntLPTokensAmount = async (state, burnAmount) => {
-    return burnAmount.mul(await calculateBalance(state)).div(state.lpTokensSupply);
+const calculateTokensByBurntLPTokensAmount = async (state, burnAmount, totalFundingFees) => {
+    return burnAmount.mul(await calculateBalance(state, totalFundingFees)).div(state.lpTokensSupply);
 };
 
-const calculateOpenPositionAmounts = async (state, amount, noPremiumFee, leverage = 1) => {
+const calculateNextAdjustedTimestamp = (adjustedTimestamp, timestamp, deltaCollateral) => {
+    let nextAdjustedTimestamp = adjustedTimestamp;
+    if (nextAdjustedTimestamp.lt(timestamp.sub(TIME_WINDOW))) {
+        nextAdjustedTimestamp = timestamp.sub(TIME_WINDOW);
+    }
+
+    nextAdjustedTimestamp = nextAdjustedTimestamp.add(deltaCollateral.mul(TIME_WINDOW).div(MAX_FEE_DELTA_COLLATERAL.mul(PRECISION_DECIMALS).div(MAX_FEE)));
+
+    if (nextAdjustedTimestamp.gt(timestamp)) {
+        nextAdjustedTimestamp = timestamp;
+    }
+
+    return nextAdjustedTimestamp;
+}
+
+const calculateOpenPositionAmounts = async (state, timestamp, amount, noPremiumFee, leverage = 1, midVolumeFee = MID_VOLUME_FEE, saveState = true) => {
     const openPositionFeePercent = await getContracts().feesCalculator.openPositionFeePercent();
     const openPositionLPFeePercent = await getContracts().feesCalculator.openPositionLPFeePercent();
     const turbulencePercent = state.turbulence;
@@ -326,22 +348,26 @@ const calculateOpenPositionAmounts = async (state, amount, noPremiumFee, leverag
     const expectedCollateral = state.totalPositionUnits.add(expectedPositionUnits).mul(PRECISION_DECIMALS).div(state.sharedPool.add((openPositionTokens.sub(openPositionTokensFees).mul(new BN(leverage)))));
     const lastCollateral = state.totalPositionUnits.mul(PRECISION_DECIMALS).div(state.sharedPool);
 
-    let premiumPercent = calculatePremiumFee(expectedPositionUnits, expectedCollateral, lastCollateral, turbulencePercent).feePercentage;
-    if (!premiumPercent.gt(new BN(0))) {
-        premiumPercent = openPositionLPFeePercent;
+    let adjustedTimestamp = undefined;
+    if (noPremiumFee !== NO_FEES && noPremiumFee !== ONLY_COLLATERAL_PREMIUM) {
+        adjustedTimestamp = calculateNextAdjustedTimestamp(state.adjustedTimestamp, timestamp, expectedCollateral.sub(lastCollateral));
+        if (saveState) {
+            state.adjustedTimestamp = adjustedTimestamp;
+        }
     }
 
-    //console.log('exp position units', expectedPositionUnits.toString());
-    //console.log('exp col.', expectedCollateral.toString());
-    //console.log('premium', premiumPercent.toString());
+    const result = calculatePremiumFee(adjustedTimestamp, timestamp, expectedPositionUnits, expectedCollateral, lastCollateral, turbulencePercent, undefined, MIN_PREMIUM_COLLATERLA_FEE, undefined, midVolumeFee);
+    const premiumPercent = result.feePercentage;
 
-    const openPositionPremiumFees = noPremiumFee ? getFee(openPositionTokens.mul(new BN(leverage)), openPositionLPFeePercent) : getFee(openPositionTokens.mul(new BN(leverage)), premiumPercent);
+    const openPositionPremiumFees = noPremiumFee === NO_FEES ? getFee(openPositionTokens.mul(new BN(leverage)), openPositionLPFeePercent) : getFee(openPositionTokens.mul(new BN(leverage)), premiumPercent);
     const openPositionTokensMinusFees = openPositionTokens.sub(openPositionTokensFees).sub(openPositionPremiumFees);
     const openPositionLeveragedTokens = openPositionTokensMinusFees.mul(new BN(leverage));
 
     const positionUnits = openPositionLeveragedTokens.mul(getContracts().maxCVIValue).div(cviValue);
 
-    return { openPositionTokens, openPositionTokensFees, openPositionPremiumFees, openPositionTokensMinusFees, openPositionLeveragedTokens, positionUnits };
+    return { openPositionTokens, openPositionTokensFees, openPositionPremiumFees, 
+        premiumPercentage: noPremiumFee == NO_FEES ? toBN(0) : result.collateralFee, 
+        openPositionTokensMinusFees, openPositionLeveragedTokens, positionUnits, volumeFeePercentage: result.volumeFeePercentage };
 };
 
 const calculatePositionBalance = async positionUnits => {
@@ -354,6 +380,14 @@ const deposit = (tokens, minLPTokens, account) => {
         return getContracts().platform.depositETH(minLPTokens, {value: tokens, from: account, gasPrice: GAS_PRICE});
     } else {
         return getContracts().platform.deposit(tokens, minLPTokens, {from: account});
+    }
+};
+
+const callDeposit = (tokens, minLPTokens, account) => {
+    if (getContracts().isETH) {
+        return getContracts().platform.depositETH.call(minLPTokens, {value: tokens, from: account, gasPrice: GAS_PRICE});
+    } else {
+        return getContracts().platform.deposit.call(tokens, minLPTokens, {from: account});
     }
 };
 
@@ -381,6 +415,14 @@ const callWithdraw = (tokens, maxLPTokensBurn, account) => {
     }
 };
 
+const callWithdrawLPTokens = (lpTokens, account) => {
+    if (getContracts().isETH) {
+        return getContracts().platform.withdrawLPTokens.call(lpTokens, {from: account, gasPrice: GAS_PRICE});
+    } else {
+        return getContracts().platform.withdrawLPTokens.call(lpTokens, {from: account});
+    }
+};
+
 const openPosition = (tokens, cviValue, account, maxBuyingPremiumPercent = 1000, leverage = 1) => {
     if (getContracts().isETH) {
         return getContracts().platform.openPositionETH(cviValue, maxBuyingPremiumPercent, leverage, {value: tokens, from: account, gasPrice: GAS_PRICE});
@@ -394,6 +436,22 @@ const callOpenPosition = (tokens, cviValue, account, maxBuyingPremiumPercent = 1
         return getContracts().platform.openPositionETH.call(cviValue, maxBuyingPremiumPercent, leverage, {value: tokens, from: account, gasPrice: GAS_PRICE});
     } else {
         return getContracts().platform.openPosition.call(tokens, cviValue, maxBuyingPremiumPercent, leverage, {from: account});
+    }
+};
+
+const openPositionWithoutVolumeFee = (tokens, cviValue, account, maxBuyingPremiumPercent = 1000, leverage = 1) => {
+    if (getContracts().isETH) {
+        return getContracts().platform.openPositionWithoutVolumeFeeETH(cviValue, maxBuyingPremiumPercent, leverage, {value: tokens, from: account, gasPrice: GAS_PRICE});
+    } else {
+        return getContracts().platform.openPositionWithoutVolumeFee(tokens, cviValue, maxBuyingPremiumPercent, leverage, {from: account});
+    }
+};
+
+const callOpenPositionWithoutVolumeFee = (tokens, cviValue, account, maxBuyingPremiumPercent = 1000, leverage = 1) => {
+    if (getContracts().isETH) {
+        return getContracts().platform.openPositionWithoutVolumeFeeETH.call(cviValue, maxBuyingPremiumPercent, leverage, {value: tokens, from: account, gasPrice: GAS_PRICE});
+    } else {
+        return getContracts().platform.openPositionWithoutVolumeFee.call(tokens, cviValue, maxBuyingPremiumPercent, leverage, {from: account});
     }
 };
 
@@ -413,48 +471,68 @@ const callOpenPositionWithoutPremiumFee = (tokens, cviValue, account, leverage =
     }
 };
 
-const closePosition = (positionUnits, cviValue, account) => {
+const closePosition = (positionUnits, cviValue, account, maxBuyingPremiumPercent = 1000) => {
     if (getContracts().isETH) {
-        return getContracts().platform.closePosition(positionUnits, cviValue, {from: account, gasPrice: GAS_PRICE});
+        return getContracts().platform.closePosition(positionUnits, cviValue, maxBuyingPremiumPercent, {from: account, gasPrice: GAS_PRICE});
     } else {
-        return getContracts().platform.closePosition(positionUnits, cviValue, {from: account});
+        return getContracts().platform.closePosition(positionUnits, cviValue, maxBuyingPremiumPercent, {from: account});
     }
 };
 
-const callClosePosition = (positionUnits, cviValue, account) => {
+const callClosePosition = (positionUnits, cviValue, account, maxBuyingPremiumPercent = 1000) => {
     if (getContracts().isETH) {
-        return getContracts().platform.closePosition.call(positionUnits, cviValue, {from: account, gasPrice: GAS_PRICE});
+        return getContracts().platform.closePosition.call(positionUnits, cviValue, maxBuyingPremiumPercent, {from: account, gasPrice: GAS_PRICE});
     } else {
-        return getContracts().platform.closePosition.call(positionUnits, cviValue, {from: account});
+        return getContracts().platform.closePosition.call(positionUnits, cviValue, maxBuyingPremiumPercent, {from: account});
     }
 };
 
-const depositAndValidate = async (state, depositTokensNumber, account) => {
+const closePositionWithoutVolumeFee = (positionUnits, cviValue, account) => {
+    if (getContracts().isETH) {
+        return getContracts().platform.closePositionWithoutVolumeFee(positionUnits, cviValue, {from: account, gasPrice: GAS_PRICE});
+    } else {
+        return getContracts().platform.closePositionWithoutVolumeFee(positionUnits, cviValue, {from: account});
+    }
+};
+
+const callClosePositionWithoutVolumeFee = (positionUnits, cviValue, account) => {
+    if (getContracts().isETH) {
+        return getContracts().platform.closePositionWithoutVolumeFee.call(positionUnits, cviValue, {from: account, gasPrice: GAS_PRICE});
+    } else {
+        return getContracts().platform.closePositionWithoutVolumeFee.call(positionUnits, cviValue, {from: account});
+    }
+};
+
+const depositAndValidate = async (state, depositTokensNumber, account, totalFundingFees) => {
     const { depositTokens, depositTokenFees, depositTokenMinusFees } = await calculateDepositAmounts(state, depositTokensNumber);
 
-    let beforeBalance;
     if (!getContracts().isETH) {
         await getContracts().token.transfer(account, depositTokens, {from: admin});
         await getContracts().token.approve(getContracts().platform.address, depositTokens, {from: account});
-        beforeBalance = await getContracts().token.balanceOf(account);
-    } else {
-        beforeBalance = await balance.current(account, 'wei');
     }
 
+    const beforeBalance = await getAccountBalance(account);
+
+    const result = await callDeposit(depositTokens, new BN(0), account);
+    const {totalFundingFees: totalFundingFeesCall} = await updateSnapshots(state, false);
+
     const tx = await deposit(depositTokens, new BN(0), account);
+    const {latestTimestamp: depositTimestamp} = await updateSnapshots(state);
+
+    const { lpTokens } = await calculateDepositAmounts(state, depositTokensNumber);
+    const { lpTokens: lpTokensCall } = await calculateDepositAmounts(state, depositTokensNumber, totalFundingFeesCall);
+
+    expect(result).to.be.bignumber.equal(lpTokensCall);
 
     print('DEPOSIT: ' + tx.receipt.gasUsed.toString());
 
-    const {latestTimestamp: depositTimestamp} = await updateSnapshots(state);
-    const { lpTokens } = await calculateDepositAmounts(state, depositTokensNumber);
-    await verifyDepositEvent(tx.logs[0], account, depositTokens);
+    await expectEvent(tx, 'Deposit', {account, tokenAmount: depositTokens, lpTokensAmount: lpTokens, feeAmount: depositTokenFees});
 
-    let afterBalance;
+    const afterBalance = await getAccountBalance(account);
+
     if (getContracts().isETH) {
-        afterBalance = await balance.current(account, 'wei');
         expect(beforeBalance.sub(afterBalance)).to.be.bignumber.equal(depositTokens.add((new BN(tx.receipt.gasUsed)).mul(GAS_PRICE)));
     } else {
-        afterBalance = await getContracts().token.balanceOf(account);
         expect(beforeBalance.sub(afterBalance)).to.be.bignumber.equal(depositTokens);
     }
 
@@ -466,7 +544,7 @@ const depositAndValidate = async (state, depositTokensNumber, account) => {
 
     await validateLPState(state);
 
-    return depositTimestamp;
+    return {depositTimestamp, gasUsed: (new BN(tx.receipt.gasUsed)).mul(GAS_PRICE)};
 };
 
 const withdrawAndValidate = async (state, withdrawTokensNumber, account, lpTokens) => {
@@ -474,37 +552,54 @@ const withdrawAndValidate = async (state, withdrawTokensNumber, account, lpToken
 
     if (lpTokens !== undefined) {
         burnedLPTokens = lpTokens;
-        withdrawTokens = await calculateTokensByBurntLPTokensAmount(state, burnedLPTokens);
-        const results = await calculateWithdrawAmounts(state, withdrawTokens);
-
-        withdrawTokenFees = results.withdrawTokenFees;
-        withdrawTokenMinusFees = results.withdrawTokenMinusFees;
     }
 
-    const beforeBalance = getContracts().isETH ? await balance.current(account, 'wei') : await getContracts().token.balanceOf(account);
+    const beforeBalance = await getAccountBalance(account);
 
-    const result = await callWithdraw(withdrawTokens, burnedLPTokens, account);
+    const result = lpTokens === undefined ? await callWithdraw(withdrawTokens, burnedLPTokens, account) :
+        await callWithdrawLPTokens(burnedLPTokens, account);
+    const {latestTimestamp: timestampCall, totalFundingFees: totalFundingFeesCall} = await updateSnapshots(state, false);
 
     const tx = lpTokens === undefined ? await withdraw(withdrawTokens, burnedLPTokens, account) :
         await withdrawLPTokens(burnedLPTokens, account);
     const {latestTimestamp: timestamp} = await updateSnapshots(state);
 
+    let burnedLPTokensCall, withdrawTokensMinusFeesCall;
+
     if (lpTokens === undefined) {
         const results = await calculateWithdrawAmounts(state, withdrawTokens);
+        const resultsCall = await calculateWithdrawAmounts(state, withdrawTokens, totalFundingFeesCall);
 
         burnedLPTokens = results.burnedLPTokens;
         withdrawTokenMinusFees = results.withdrawTokenMinusFees;
         withdrawTokenFees = results.withdrawTokenFees;
+
+        burnedLPTokensCall = resultsCall.burnedLPTokens;
+        withdrawTokensMinusFeesCall = resultsCall.withdrawTokenMinusFees;
+    } else {
+        burnedLPTokens = lpTokens;
+        burnedLPTokensCall = lpTokens;
+
+        withdrawTokens = await calculateTokensByBurntLPTokensAmount(state, burnedLPTokens);
+        const withdrawTokensCall = await calculateTokensByBurntLPTokensAmount(state, burnedLPTokens, totalFundingFeesCall);
+
+        const results = await calculateWithdrawAmounts(state, withdrawTokens);
+        const resultsCall = await calculateWithdrawAmounts(state, withdrawTokensCall, totalFundingFeesCall);
+
+        withdrawTokenFees = results.withdrawTokenFees;
+        withdrawTokenMinusFees = results.withdrawTokenMinusFees;
+
+        withdrawTokensMinusFeesCall = resultsCall.withdrawTokenMinusFees;
     }
 
-    expect(result[0]).to.be.bignumber.equal(burnedLPTokens);
-    expect(result[1]).to.be.bignumber.equal(withdrawTokenMinusFees);
+    expect(result[0]).to.be.bignumber.equal(burnedLPTokensCall);
+    expect(result[1]).to.be.bignumber.equal(withdrawTokensMinusFeesCall);
 
-    await verifyWithdrawEvent(tx.logs[0], account, withdrawTokens);
+    await expectEvent(tx, 'Withdraw', {account, tokenAmount: withdrawTokens, lpTokensAmount: burnedLPTokens, feeAmount: withdrawTokenFees});
 
     print('WITHDRAW: ' + tx.receipt.gasUsed.toString());
 
-    const afterBalance = getContracts().isETH ? await balance.current(account, 'wei') : await getContracts().token.balanceOf(account);
+    const afterBalance = await getAccountBalance(account);
 
     state.totalFeesSent = state.totalFeesSent.add(withdrawTokenFees);
     state.lpTokensSupply = state.lpTokensSupply.sub(burnedLPTokens);
@@ -520,7 +615,7 @@ const withdrawAndValidate = async (state, withdrawTokensNumber, account, lpToken
         expect(afterBalance.sub(beforeBalance)).to.be.bignumber.equal(withdrawTokenMinusFees);
     }
 
-    return timestamp;
+    return {timestamp, gasUsed: (new BN(tx.receipt.gasUsed)).mul(GAS_PRICE)};
 };
 
 const validatePosition = (actualPosition, expectedPosition) => {
@@ -531,9 +626,7 @@ const validatePosition = (actualPosition, expectedPosition) => {
     expect(actualPosition.originalCreationTimestamp).to.be.bignumber.equal(expectedPosition.originalCreationTimestamp);
 };
 
-const openPositionAndValidate = async (state, amount, account, validateRewards = true, noPremiumFee = false, leverage = 1) => {
-    const beforeUnclaimedPositionUnits = await getContracts().rewards.unclaimedPositionUnits(account);
-
+const openPositionAndValidate = async (state, amount, account, validateRewards = true, noPremiumFee = ALL_FEES, leverage = 1, midVolumeFee = MID_VOLUME_FEE, shouldLiquidate = false) => {
     const isMerge = state.positions[account] !== undefined;
     const openPositionTokens = new BN(amount);
 
@@ -542,64 +635,67 @@ const openPositionAndValidate = async (state, amount, account, validateRewards =
         await getContracts().token.approve(getContracts().platform.address, openPositionTokens, {from: account});
     }
 
-    const beforeBalance = getContracts().isETH ? await balance.current(account, 'wei') : await getContracts().token.balanceOf(account);
-
-    let currentPositionBalance = new BN(0);
-    if (isMerge) {
-        currentPositionBalance = (await getContracts().platform.calculatePositionBalance(account))[0];
-        console.log('position units', (await getContracts().platform.positions(account)).positionUnitsAmount.toString());
-    }
+    const beforeBalance = await getAccountBalance(account);
 
     const cviValue = (await getContracts().fakeOracle.getCVILatestRoundData()).cviValue;
-    const result = noPremiumFee ? await callOpenPositionWithoutPremiumFee(openPositionTokens, cviValue, account, leverage) : await callOpenPosition(openPositionTokens, cviValue, account, 1000, leverage);
-    const tx = noPremiumFee ? await openPositionWithoutPremiumFee(openPositionTokens, cviValue, account, leverage) : await openPosition(openPositionTokens, cviValue, account, 1000, leverage);
 
-    //console.log('premium', tx.logs[0].args.premium.toString());
-    //console.log('premiumPerc', tx.logs[0].args.premiumPercentage.toString());
-    //console.log('collateral', tx.logs[0].args.collateral.toString());
+    const result = noPremiumFee === ONLY_COLLATERAL_PREMIUM ? await callOpenPositionWithoutVolumeFee(openPositionTokens, cviValue, account, 1000, leverage) :
+        (noPremiumFee === NO_FEES ? await callOpenPositionWithoutPremiumFee(openPositionTokens, cviValue, account, leverage) : await callOpenPosition(openPositionTokens, cviValue, account, 1000, leverage));
+    const {latestTimestamp: timestampCall, snapshot: snapshotCall} = await updateSnapshots(state, false);
+    const tx = noPremiumFee === ONLY_COLLATERAL_PREMIUM ? await openPositionWithoutVolumeFee(openPositionTokens, cviValue, account, 1000, leverage) : 
+        (noPremiumFee === NO_FEES ? await openPositionWithoutPremiumFee(openPositionTokens, cviValue, account, leverage) : await openPosition(openPositionTokens, cviValue, account, 1000, leverage));
+    const {latestTimestamp: timestamp} = await updateSnapshots(state);
 
     print('OPEN: ' + tx.receipt.gasUsed.toString());
 
-    const {latestTimestamp: timestamp} = await updateSnapshots(state);
-    const { openPositionTokensFees, openPositionPremiumFees, openPositionTokensMinusFees, openPositionLeveragedTokens, positionUnits } = await calculateOpenPositionAmounts(state, amount, noPremiumFee, leverage);
+    const { positionUnits: positionUnitsCall } = 
+        await calculateOpenPositionAmounts(state, timestampCall, amount, noPremiumFee, leverage, midVolumeFee, false);
+
+    const { openPositionTokensFees, openPositionPremiumFees, premiumPercentage, openPositionTokensMinusFees, openPositionLeveragedTokens, positionUnits, volumeFeePercentage } = 
+        await calculateOpenPositionAmounts(state, timestamp, amount, noPremiumFee, leverage, midVolumeFee);
 
     let finalPositionUnits = positionUnits;
+    let finalPositionUnitsCall = positionUnitsCall;
     let positionUnitsAdded = finalPositionUnits;
     if (isMerge) {
         const oldPositionUnits = state.positions[account].positionUnitsAmount;
         const fundingFees = calculateFundingFees(state, timestamp, account, state.positions[account].positionUnitsAmount);
+        const fundingFeesCall = calculateFundingFeesWithSnapshot(state, snapshotCall, account, state.positions[account].positionUnitsAmount);
         const marginDebt = state.positions[account].positionUnitsAmount.mul(state.positions[account].openCVIValue).mul(state.positions[account].leverage.sub(new BN(1))) .div(getContracts().maxCVIValue).div(state.positions[account].leverage);
+
         const positionBalance = state.positions[account].positionUnitsAmount.mul(cviValue).div(getContracts().maxCVIValue).sub(fundingFees).sub(marginDebt);
-        finalPositionUnits = positionBalance.add(openPositionTokensMinusFees).mul(new BN(leverage)).mul(getContracts().maxCVIValue).div(cviValue);
+        const positionBalanceCall = state.positions[account].positionUnitsAmount.mul(cviValue).div(getContracts().maxCVIValue).sub(fundingFeesCall).sub(marginDebt);
 
-        //console.log('exp position units', state.positions[account].positionUnitsAmount.toString());
-        //console.log('exp margin debt', marginDebt.toString());
-        expect(currentPositionBalance).to.be.bignumber.equal(positionBalance);
+        if (!shouldLiquidate) {
+            finalPositionUnits = positionBalance.add(openPositionTokensMinusFees).mul(new BN(leverage)).mul(getContracts().maxCVIValue).div(cviValue);
+            finalPositionUnitsCall = positionBalanceCall.add(openPositionTokensMinusFees).mul(new BN(leverage)).mul(getContracts().maxCVIValue).div(cviValue);
 
-        positionUnitsAdded = new BN(0);
-        if (oldPositionUnits.lt(finalPositionUnits)) {
-            positionUnitsAdded = finalPositionUnits.sub(oldPositionUnits);
+            positionUnitsAdded = new BN(0);
+            if (oldPositionUnits.lt(finalPositionUnits)) {
+                positionUnitsAdded = finalPositionUnits.sub(oldPositionUnits);
+            }
+        } else {
+            await expectEvent(tx, 'LiquidatePosition', {positionAddress: account, currentPositionBalance: positionBalance.mul(toBN(-1)), isBalancePositive: false, positionUnitsAmount: state.positions[account].positionUnitsAmount});
         }
 
-        state.totalFundingFees = state.totalFundingFees.sub(fundingFees);
-        state.totalPositionUnits = state.totalPositionUnits.sub(oldPositionUnits);
-        state.sharedPool = state.sharedPool.sub(positionBalance).sub(marginDebt).add(positionBalance.add(openPositionTokensMinusFees).mul(new BN(leverage))).add(openPositionPremiumFees);
-        state.totalMarginDebt = state.totalMarginDebt.sub(marginDebt).add(positionBalance.add(openPositionTokensMinusFees).mul((new BN(leverage)).sub(new BN(1))));
+        subtractTotalPositionUnits(state, oldPositionUnits, fundingFees);
+
+        if (shouldLiquidate) {
+            state.sharedPool.sub(marginDebt);
+            state.totalMarginDebt.sub(marginDebt);
+        } else {
+            state.sharedPool = state.sharedPool.sub(positionBalance).sub(marginDebt).add(positionBalance.add(openPositionTokensMinusFees).mul(new BN(leverage))).add(openPositionPremiumFees);
+            state.totalMarginDebt = state.totalMarginDebt.sub(marginDebt).add(positionBalance.add(openPositionTokensMinusFees).mul((new BN(leverage)).sub(new BN(1))));
+        }
     }
 
-    verifyOpenPositionEvent(tx.logs[0], account, openPositionTokens, finalPositionUnits, cviValue, openPositionTokensFees.add(openPositionPremiumFees));
+    await expectEvent(tx, 'OpenPosition', {account, tokenAmount: openPositionTokens, leverage: toBN(leverage), feeAmount: openPositionTokensFees.add(openPositionPremiumFees), positionUnitsAmount: finalPositionUnits, cviValue});
 
     const expectedPosition = { positionUnitsAmount: finalPositionUnits, creationTimestamp: timestamp, openCVIValue: cviValue, leverage: new BN(leverage), originalCreationTimestamp: isMerge ? state.positions[account].originalCreationTimestamp : timestamp };
     const actualPosition = await getContracts().platform.positions(account);
     validatePosition(actualPosition, expectedPosition);
 
-    const afterUnclaimedPositionUnits = await getContracts().rewards.unclaimedPositionUnits(account);
-
-    if (validateRewards) {
-        expect(afterUnclaimedPositionUnits.sub(beforeUnclaimedPositionUnits)).to.be.bignumber.equal(positionUnitsAdded.div(new BN(leverage)));
-    }
-
-    expect(result[0]).to.be.bignumber.equal(finalPositionUnits);
+    expect(result[0]).to.be.bignumber.equal(finalPositionUnitsCall);
     expect(result[1]).to.be.bignumber.equal(openPositionLeveragedTokens);
 
     state.totalPositionUnits = state.totalPositionUnits.add(finalPositionUnits);
@@ -607,14 +703,14 @@ const openPositionAndValidate = async (state, amount, account, validateRewards =
 
     state.totalFeesSent = state.totalFeesSent.add(openPositionTokensFees);
 
-    if (!isMerge) {
+    if (!isMerge || shouldLiquidate) {
         state.sharedPool = state.sharedPool.add(openPositionLeveragedTokens).add(openPositionPremiumFees);
         state.totalMarginDebt = state.totalMarginDebt.add(openPositionLeveragedTokens.sub(openPositionTokensMinusFees));
     }
 
     await validateLPState(state);
 
-    const afterBalance = getContracts().isETH ? await balance.current(account, 'wei') : await getContracts().token.balanceOf(account);
+    const afterBalance = await getAccountBalance(account);
 
     if (getContracts().isETH) {
         expect(beforeBalance.sub(afterBalance)).to.be.bignumber.equal(openPositionTokens.add((new BN(tx.receipt.gasUsed)).mul(GAS_PRICE)));
@@ -622,7 +718,7 @@ const openPositionAndValidate = async (state, amount, account, validateRewards =
         expect(beforeBalance.sub(afterBalance)).to.be.bignumber.equal(openPositionTokens);
     }
 
-    return {positionUnits: finalPositionUnits, timestamp};
+    return {positionUnits: finalPositionUnits, timestamp, positionUnitsAdded, gasUsed: (new BN(tx.receipt.gasUsed)).mul(GAS_PRICE), volumeFeePercentage, premiumPercentage};
 };
 
 const validateEmptyPosition = position => {
@@ -630,36 +726,47 @@ const validateEmptyPosition = position => {
     expect(position.creationTimestamp).to.be.bignumber.equal(new BN(0));
 };
 
-const closePositionAndValidate = async (state, positionUnits, account) => {
-    const positionBalance = await calculatePositionBalance(positionUnits);
-
+const closePositionAndValidate = async (state, positionUnits, account, shouldLiquidate = false, isNoLockPositionAddress = false, noVolumeFee = false, midVolumeFee = MID_VOLUME_FEE, maxVolumeFee = MAX_CLOSE_VOLUME_FEE) => {
     const currPosition = state.positions[account];
-    const marginDebt = currPosition.leverage.sub(new BN(1)).mul(currPosition.positionUnitsAmount.mul(currPosition.openCVIValue).div(getContracts().maxCVIValue).div(currPosition.leverage));
-    //console.log('margin debt', marginDebt.toString());
+    const actualPositionUnits = shouldLiquidate ? currPosition.positionUnitsAmount : positionUnits;
+    const positionBalance = await calculatePositionBalance(actualPositionUnits);
 
-    const beforeBalance = getContracts().isETH ? await balance.current(account, 'wei') : await getContracts().token.balanceOf(account);
+    const marginDebt = currPosition.leverage.sub(new BN(1)).mul(actualPositionUnits).mul(currPosition.openCVIValue).div(getContracts().maxCVIValue).div(currPosition.leverage);
+
+    const beforeBalance = await getAccountBalance(account);
 
     const cviValue = (await getContracts().fakeOracle.getCVILatestRoundData()).cviValue;
 
-    const result = await callClosePosition(positionUnits, cviValue, account);
+    const result = noVolumeFee ? await callClosePositionWithoutVolumeFee(positionUnits, cviValue, account) : await callClosePosition(positionUnits, cviValue, account);
 
-    const tx = await closePosition(positionUnits, cviValue, account);
+    const {latestTimestamp: timestampCall, snapshot: snapshotCall} = await updateSnapshots(state, false);
+
+    const tx = noVolumeFee ? await closePositionWithoutVolumeFee(positionUnits, cviValue, account) : await closePosition(positionUnits, cviValue, account);
     const {latestTimestamp: timestamp} = await updateSnapshots(state);
 
     print('CLOSE: ' + tx.receipt.gasUsed.toString());
 
-    const fundingFees = calculateFundingFees(state, timestamp, account, positionUnits);
+    const fundingFees = calculateFundingFees(state, timestamp, account, actualPositionUnits);
+    const fundingFeesCall = calculateFundingFeesWithSnapshot(state, snapshotCall, account, actualPositionUnits);
+
     const positionBalanceAfterFundingFees = positionBalance.sub(fundingFees);
-    const closeFees = await getContracts().feesCalculator.closePositionFeePercent();
+    const positionBalanceAfterFundingFeesCall = positionBalance.sub(fundingFeesCall);
+
+    const closeFeesPercent = await getContracts().feesCalculator.closePositionFeePercent();
+    const closeFees = calculateClosePositionFeePercent(timestamp, currPosition.creationTimestamp, isNoLockPositionAddress, closeFeesPercent);
+    const closeFeesCall = await getContracts().feesCalculator.calculateClosePositionFeePercent(currPosition.creationTimestamp, isNoLockPositionAddress);
+    expect(closeFeesCall).to.be.bignumber.equal(closeFees);
+
     const closePositionTokensFees = getFee(positionBalanceAfterFundingFees.sub(marginDebt), closeFees);
-    const totalFees = closePositionTokensFees.add(fundingFees);
-    verifyClosePositionEvent(tx.logs[0], account, positionBalance.sub(marginDebt), state.positions[account].positionUnitsAmount.sub(positionUnits), cviValue, totalFees);
+    const closePositionTokensFeesCall = getFee(positionBalanceAfterFundingFeesCall.sub(marginDebt), closeFees);
 
-    const afterBalance = getContracts().isETH ? await balance.current(account, 'wei') : await getContracts().token.balanceOf(account);
+    const afterBalance = await getAccountBalance(account);
 
-    currPosition.positionUnitsAmount = currPosition.positionUnitsAmount.sub(positionUnits);
+    const originalPositionUnits = currPosition.positionUnitsAmount;
+    currPosition.positionUnitsAmount = currPosition.positionUnitsAmount.sub(actualPositionUnits);
 
-    if (currPosition.positionUnitsAmount.toNumber() === 0) {
+    const finalPositionUnits = currPosition.positionUnitsAmount;
+    if (currPosition.positionUnitsAmount.eq(new BN(0))) {
         const actualPosition = await getContracts().platform.positions(account);
         validateEmptyPosition(actualPosition);
         delete state.positions[account];
@@ -668,87 +775,136 @@ const closePositionAndValidate = async (state, positionUnits, account) => {
         validatePosition(actualPosition, currPosition);
     }
 
-    state.totalPositionUnits = state.totalPositionUnits.sub(positionUnits);
-    if (state.totalFundingFees.sub(fundingFees).lt(new BN(0))) {
-        state.totalFundingFees = new BN(0);
-    } else {
-        state.totalFundingFees = state.totalFundingFees.sub(fundingFees);
+    const lastCollateral = state.totalPositionUnits.mul(PRECISION_DECIMALS).div(state.sharedPool);
+    subtractTotalPositionUnits(state, actualPositionUnits, fundingFees);
+    const expectedCollateral = state.totalPositionUnits.mul(PRECISION_DECIMALS).div(state.sharedPool.sub(positionBalance).add(fundingFees));
+
+    let closeAdjustedTimestamp = undefined;
+    if (!noVolumeFee && !shouldLiquidate) {
+        closeAdjustedTimestampCall = calculateNextAdjustedTimestamp(state.closeAdjustedTimestamp, timestampCall, lastCollateral.sub(expectedCollateral));
+        closeAdjustedTimestamp = calculateNextAdjustedTimestamp(state.closeAdjustedTimestamp, timestamp, lastCollateral.sub(expectedCollateral));
+        state.closeAdjustedTimestamp = closeAdjustedTimestamp;
     }
 
-    state.totalFeesSent = state.totalFeesSent.add(closePositionTokensFees);
-    state.sharedPool = state.sharedPool.sub(positionBalance).add(fundingFees);
+    const premiumFeeResult = calculatePremiumFee(closeAdjustedTimestamp, timestamp, positionBalanceAfterFundingFees.sub(marginDebt), expectedCollateral, lastCollateral, toBN(0), toBN(0), undefined, undefined, midVolumeFee, maxVolumeFee, false);
+    const premiumPercent = premiumFeeResult.feePercentage;
+    const premiumFee = premiumFeeResult.fee;
+
+    const premiumFeeResultCall = calculatePremiumFee(closeAdjustedTimestamp, timestampCall, positionBalanceAfterFundingFeesCall.sub(marginDebt), expectedCollateral, lastCollateral, toBN(0), toBN(0), undefined, undefined, midVolumeFee, maxVolumeFee, false);
+    const premiumFeeCall = premiumFeeResultCall.fee;
+
+    const totalFees = closePositionTokensFees.add(fundingFees).add(premiumFee);
+    const totalFeesCall = closePositionTokensFeesCall.add(fundingFeesCall).add(premiumFeeCall);
+
+    if (shouldLiquidate) {
+        await expectEvent(tx, 'LiquidatePosition', {positionAddress: account, currentPositionBalance: positionBalanceAfterFundingFees.sub(marginDebt).mul(toBN(-1)), isBalancePositive: false, positionUnitsAmount: originalPositionUnits});
+    } else {
+        await expectEvent(tx, 'ClosePosition', {account, tokenAmount: positionBalance.sub(marginDebt), feeAmount: totalFees, positionUnitsAmount: finalPositionUnits, cviValue});
+    }
+
+    if (!shouldLiquidate) {
+        state.totalFeesSent = state.totalFeesSent.add(closePositionTokensFees);
+        state.sharedPool = state.sharedPool.sub(positionBalance).add(fundingFees).add(premiumFee);
+    } else {
+        state.sharedPool = state.sharedPool.sub(marginDebt);
+    }
+
     state.totalMarginDebt = state.totalMarginDebt.sub(marginDebt);
 
     await validateLPState(state);
 
     if (getContracts().isETH) {
-        expect(afterBalance.sub(beforeBalance)).to.be.bignumber.equal(positionBalance.sub(totalFees).sub(marginDebt).sub((new BN(tx.receipt.gasUsed)).mul(GAS_PRICE)));
-        expect(afterBalance.sub(beforeBalance)).to.be.bignumber.equal(result.sub((new BN(tx.receipt.gasUsed)).mul(GAS_PRICE)));
+        expect(afterBalance.sub(beforeBalance)).to.be.bignumber.equal((shouldLiquidate ? toBN(0) : positionBalance.sub(totalFees).sub(marginDebt)).sub((new BN(tx.receipt.gasUsed)).mul(GAS_PRICE)));
     } else {
-        expect(afterBalance.sub(beforeBalance)).to.be.bignumber.equal(positionBalance.sub(totalFees).sub(marginDebt));
-        expect(afterBalance.sub(beforeBalance)).to.be.bignumber.equal(result);
+        expect(afterBalance.sub(beforeBalance)).to.be.bignumber.equal(shouldLiquidate ? toBN(0) : positionBalance.sub(totalFees).sub(marginDebt));
     }
 
-    return timestamp;
+    expect(result).to.be.bignumber.equal(shouldLiquidate ? toBN(0) : positionBalance.sub(totalFeesCall).sub(marginDebt));
+
+    return {timestamp, gasUsed: toBN(tx.receipt.gasUsed).mul(GAS_PRICE), volumeFeePercentage: premiumFeeResult.volumeFeePercentage, volumeFee: premiumFee};
 };
 
-const liquidateAndValidate = async (state, account, liquidator, shouldLiquidate) => {
+const liquidateAndValidate = async (state, accounts, liquidator, shouldLiquidate) => {
     let expectedFinderFeeAmount = new BN(0);
+    let expectedFinderFeeAmountCall = new BN(0);
 
-    const {positionBalance, isPositive, fundingFees, marginDebt} = await calculateEntirePositionBalance(state, account);
-    const position = state.positions[account];
+    const expectLiquidation = Array.isArray(shouldLiquidate) || shouldLiquidate === true || shouldLiquidate === undefined;
 
-    console.log('position balance', positionBalance.toString());
-    const {liquidable} = await isLiquidable(positionBalance, isPositive, position);
+    if (expectLiquidation) {
+        const beforeBalances = {};
 
-    console.log('liquidable', liquidable);
+        for (let account of accounts) {
+            beforeBalances[account] = await getAccountBalance(account);
+        }
 
-    expect(liquidable === shouldLiquidate || shouldLiquidate === undefined).to.be.true;
+        const liquidatorBeforeBalance = await getAccountBalance(liquidator);
 
-    if (liquidable) {
-        await updateSnapshots(state);
+        const result = await getContracts().platform.liquidatePositions.call(accounts, {from: liquidator, gasPrice: GAS_PRICE});
+        const { snapshot: snapshotCall } = await updateSnapshots(state, false);
 
-        console.log('real balance', (await getContracts().platform.calculatePositionBalance(account, {from: admin}))[0].toString());
+        const tx = await getContracts().platform.liquidatePositions(accounts, {from: liquidator, gasPrice: GAS_PRICE});
+        const { snapshot } = await updateSnapshots(state);
 
-        const beforeBalance = getContracts().isETH ? await balance.current(account, 'wei') : await getContracts().token.balanceOf(account);
-        const liquidatorBeforeBalance = getContracts().isETH ? await balance.current(liquidator, 'wei') : await getContracts().token.balanceOf(liquidator);
+        const positionBalances = {};
+        const positionBalancesCall = {};
 
-        const tx = await getContracts().platform.liquidatePositions([account], {from: liquidator});
-        await expectEvent(tx, 'LiquidatePosition', {positionAddress: account, currentPositionBalance: positionBalance, isBalancePositive: isPositive, positionUnitsAmount: state.positions[account].positionUnitsAmount});
+        let accountIndex = 0;
+        for (let account of accounts) {
+            const {positionBalance, isPositive, fundingFees, marginDebt} = await calculateEntirePositionBalance(state, account, snapshot);
+            positionBalances[account] = {positionBalance, isPositive, fundingFees, marginDebt};
 
-        const expectedPosition = { positionUnitsAmount: toBN(0), leverage: toBN(0), openCVIValue: toBN(0), creationTimestamp: toBN(0), originalCreationTimestamp: toBN(0) };
-        const actualPosition = await getContracts().platform.positions(account);
-        validatePosition(actualPosition, expectedPosition);
+            const {positionBalance: positionBalanceCall, isPositive: isPositiveCall, fundingFees: fundingFeesCall, marginDebt: marginDebtCall} = 
+                await calculateEntirePositionBalance(state, account, snapshotCall);
+            positionBalancesCall[account] = {positionBalance: positionBalanceCall, isPositive: isPositiveCall, fundingFees: fundingFeesCall, marginDebt: marginDebtCall};
 
-        await expectRevert(getContracts().platform.calculatePositionBalance(account, {from: admin}), 'No position for given address');
+            const position = state.positions[account];
 
-        console.log('balance', positionBalance.toString());
-        console.log('is positive', isPositive);
-        console.log('position', position);
-        expectedFinderFeeAmount = await getLiquidationReward(positionBalance, isPositive, position);
-        console.log('expected finders fee' ,expectedFinderFeeAmount.toString());
+            const {liquidable} = await isLiquidable(positionBalance, isPositive, position);
 
-        state.totalPositionUnits = state.totalPositionUnits.sub(position.positionUnitsAmount);
-        state.totalFundingFees = state.totalFundingFees.sub(fundingFees);
-        state.positions[account] = expectedPosition;
+            const expectLiquidationValue = Array.isArray(shouldLiquidate) ? shouldLiquidate[accountIndex] : expectLiquidation;
+            expect(liquidable === expectLiquidationValue).to.be.true;
 
-        const currPosition = state.positions[account];
-        currPosition.positionUnitsAmount = new BN(0);
+            accountIndex++;
+        }
 
-        console.log('finders fee', expectedFinderFeeAmount.toString());
-        console.log('is positive', isPositive);
-  
-        expect(expectedFinderFeeAmount).to.be.bignumber.equal(expectedFinderFeeAmount);
+        accountIndex = 0;
+        for (let account of accounts) {
+            if (Array.isArray(shouldLiquidate) && !shouldLiquidate[accountIndex]) {
+                continue;
+            }
+            accountIndex++;
 
-        state.sharedPool = state.sharedPool.sub(expectedFinderFeeAmount);
-        state.totalMarginDebt = state.totalMarginDebt.sub(marginDebt);
+            await expectEvent(tx, 'LiquidatePosition', {positionAddress: account, currentPositionBalance: positionBalances[account].positionBalance, isBalancePositive: positionBalances[account].isPositive, positionUnitsAmount: state.positions[account].positionUnitsAmount});
 
-        const afterBalance = getContracts().isETH ? await balance.current(account, 'wei') : await getContracts().token.balanceOf(account);
-        expect(afterBalance).to.be.bignumber.equal(beforeBalance);
+            const expectedPosition = { positionUnitsAmount: toBN(0), leverage: toBN(0), openCVIValue: toBN(0), creationTimestamp: toBN(0), originalCreationTimestamp: toBN(0) };
+            const actualPosition = await getContracts().platform.positions(account);
+            validatePosition(actualPosition, expectedPosition);
 
-        const liquidatorAfterBalance = getContracts().isETH ? await balance.current(liquidator, 'wei') : await getContracts().token.balanceOf(liquidator);
-        console.log(liquidatorAfterBalance.toString());
-        console.log(liquidatorBeforeBalance.toString());
+            await expectRevert.unspecified(getContracts().platform.calculatePositionBalance(account, {from: admin}));
+
+            const currExpectedFinderFeeAmount = getLiquidationReward(positionBalances[account].positionBalance, positionBalances[account].isPositive, state.positions[account]);
+            const currExpectedFinderFeeAmountCall = getLiquidationReward(positionBalancesCall[account].positionBalance, positionBalancesCall[account].isPositive, state.positions[account]);
+
+            subtractTotalPositionUnits(state, state.positions[account].positionUnitsAmount, positionBalances[account].fundingFees);
+
+            state.positions[account] = expectedPosition;
+
+            const currPosition = state.positions[account];
+            currPosition.positionUnitsAmount = new BN(0);
+
+            state.sharedPool = state.sharedPool.sub(currExpectedFinderFeeAmount).sub(positionBalances[account].marginDebt);
+            state.totalMarginDebt = state.totalMarginDebt.sub(positionBalances[account].marginDebt);
+
+            const afterBalance = await getAccountBalance(account);
+            expect(afterBalance).to.be.bignumber.equal(beforeBalances[account]);
+
+            expectedFinderFeeAmount = expectedFinderFeeAmount.add(currExpectedFinderFeeAmount);
+            expectedFinderFeeAmountCall = expectedFinderFeeAmountCall.add(currExpectedFinderFeeAmountCall);
+        }
+
+        expect(result).to.be.bignumber.equal(expectedFinderFeeAmountCall);
+
+        const liquidatorAfterBalance = await getAccountBalance(liquidator);
 
         if (getContracts().isETH) {
             expect(liquidatorAfterBalance.sub(liquidatorBeforeBalance)).to.be.bignumber.equal(expectedFinderFeeAmount.sub((new BN(tx.receipt.gasUsed)).mul(GAS_PRICE)));
@@ -756,7 +912,7 @@ const liquidateAndValidate = async (state, account, liquidator, shouldLiquidate)
             expect(liquidatorAfterBalance.sub(liquidatorBeforeBalance)).to.be.bignumber.equal(expectedFinderFeeAmount);
         }
     } else {
-        await expectRevert(getContracts().platform.liquidatePositions([account], {from: liquidator}), 'No liquidatable position');
+        await expectRevert(getContracts().platform.liquidatePositions(accounts, {from: liquidator}), 'No liquidable position');
     }
 
     await validateLPState(state);
@@ -771,15 +927,19 @@ exports.closePosition = closePosition;
 
 exports.calculateDepositAmounts = calculateDepositAmounts;
 exports.calculateWithdrawAmounts = calculateWithdrawAmounts;
+exports.calculateTokensByBurntLPTokensAmount = calculateTokensByBurntLPTokensAmount;
 exports.calculatePositionBalance = calculatePositionBalance;
 exports.calculateFundingFees = calculateFundingFees;
+exports.calculateFundingFeesWithSnapshot = calculateFundingFeesWithSnapshot;
+exports.calculateFundingFeesWithTwoSnapshots = calculateFundingFeesWithTwoSnapshots;
+exports.calculateMarginDebt = calculateMarginDebt;
+exports.calculateBalance = calculateBalance;
 exports.calculateOpenPositionAmounts = calculateOpenPositionAmounts;
 exports.calculateLiquidationCVI = calculateLiquidationCVI;
 exports.calculateLiquidationDays = calculateLiquidationDays;
 
 exports.updateSnapshots = updateSnapshots;
 
-exports.verifyOpenPositionEvent = verifyOpenPositionEvent;
 exports.validatePosition = validatePosition;
 exports.validateLPState = validateLPState;
 exports.validateEmptyPosition = validateEmptyPosition;
@@ -791,5 +951,16 @@ exports.openPositionAndValidate = openPositionAndValidate;
 exports.closePositionAndValidate = closePositionAndValidate;
 exports.liquidateAndValidate = liquidateAndValidate;
 
+exports.getAccountBalance = getAccountBalance;
+exports.getFeesBalance = getFeesBalance;
+
 exports.MAX_FEE = MAX_FEE;
 exports.GAS_PRICE = GAS_PRICE;
+exports.MAX_FEE_DELTA_COLLATERAL = MAX_FEE_DELTA_COLLATERAL;
+exports.LEVERAGE_TO_THRESHOLD = LEVERAGE_TO_THRESHOLD;
+exports.LEVERAGE_TO_MAX = LEVERAGE_TO_MAX;
+exports.LIQUIDATION_MIN_REWARD_PERCENTAGE = LIQUIDATION_MIN_REWARD_PERCENTAGE;
+exports.LIQUIDATION_MAX_FEE_PERCENTAGE = LIQUIDATION_MAX_FEE_PERCENTAGE;
+
+exports.NO_FEES = NO_FEES;
+exports.ONLY_COLLATERAL_PREMIUM = ONLY_COLLATERAL_PREMIUM;

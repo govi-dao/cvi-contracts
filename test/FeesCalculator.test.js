@@ -1,35 +1,31 @@
 const {expectRevert, time, BN} = require('@openzeppelin/test-helpers');
-const {accounts, contract} = require('@openzeppelin/test-environment');
 const chai = require('chai');
 
-const FeesCalculator = contract.fromArtifact('FeesCalculator');
-const CVIOracle = contract.fromArtifact('ETHVolOracle');
-const FakePriceProvider = contract.fromArtifact('FakePriceProvider');
+const FeesCalculator = artifacts.require('FeesCalculator');
+const CVIOracle = artifacts.require('ETHVolOracle');
+const FakePriceProvider = artifacts.require('FakePriceProvider');
 
-const {getContracts} = require('./utils/DeployUtils.js');
+const { getContracts, getAccounts, ZERO_ADDRESS } = require('./utils/DeployUtils.js');
 const {toBN, toTokenAmount, toCVI} = require('./utils/BNUtils.js');
-const {calculateSingleUnitFee, calculatePremiumFee, MAX_PERCENTAGE} = require('./utils/FeesUtils.js');
+const {calculateSingleUnitFee, calculatePremiumFee, MAX_PERCENTAGE, COLLATERAL_TO_PREMIUM_FEE_RATIOS} = require('./utils/FeesUtils.js');
 const { print } = require('./utils/DebugUtils');
 
 const expect = chai.expect;
-const [admin, updator, bob] = accounts;
 
 const SECONDS_PER_HOUR = 60 * 60;
 
-const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
-
-//TODO: Test period zero in various scenarios in updateSnapshots
-//TOOD: test setOracleHeartbeatPeriod, setBuyingPremiumFeeMax, setBuyingPremiumThreshold, setTurbulenceStep
-//TODO: Test close fee decay new method
-//TODO: Test exponent overflow in single slot calculation
-
-const PREMIUM_FEE_TEST_RATIOS = [0.799, 0.81, 0.81, 0.94, 0.95, 0.99, 1.0, 1.01];
-const PREMIUM_FEE_TEST_LAST_RATIOS = [0.7, 0.75, 0.7, 0.76, 0.7, 0.4, 0.5, 0.6];
+const PREMIUM_FEE_TEST_RATIOS = [0.599, 0.61, 0.61, 0.74, 0.85, 0.99, 1.0, 1.01];
+const PREMIUM_FEE_TEST_LAST_RATIOS = [0.5, 0.55, 0.5, 0.56, 0.5, 0.2, 0.3, 0.4];
 const PREMIUM_FEE_TEST_UNITS = [1, 1000, 2000];
 
 const MAX_CVI_VALUE = toBN(22000);
 
 const RATIO_DECIMALS = toBN(1, 10);
+
+const MIN_PREMIUM_COLLATERLA_FEE = 6500;
+
+const LP_PREMIUM_FEE_PERCENTAGE = toBN(15);
+const MAX_PREMIUM_FEE_PERCENTAGE = toBN(1000);
 
 const premiumFeeTests = [];
 
@@ -57,6 +53,12 @@ const FUNDING_FEE_TESTS = [
     [{period: 7777, cviValue: 12100}]
 ];
 
+let admin, updator, bob;
+
+const setAccounts = async () => {
+    [admin, updator, bob] = await getAccounts();
+};
+
 const validateTurbulenceUpdate = async periods => {
     let currTurbulence = await this.feesCalculator.turbulenceIndicatorPercent();
 
@@ -80,18 +82,38 @@ const validateTurbulenceUpdate = async periods => {
     expect(await this.feesCalculator.turbulenceIndicatorPercent()).to.be.bignumber.equal(currTurbulence);
 };
 
+const testBuyingPremiumMapping = async mapping => {
+    for (let i = 0; i < mapping.length; i++) {
+        const collateralRatio = i * 10**10 / 10**2;
+        const result = await this.feesCalculator.calculateBuyingPremiumFee(new BN(10000), 1, collateralRatio, collateralRatio, false);
+
+        let expectedPremium = (new BN(mapping[i])).add(LP_PREMIUM_FEE_PERCENTAGE);
+
+        if (expectedPremium.gt(MAX_PREMIUM_FEE_PERCENTAGE)) {
+            expectedPremium = MAX_PREMIUM_FEE_PERCENTAGE;
+        }
+
+        expect(result[0]).to.be.bignumber.equal(expectedPremium);
+        expect(result[1]).to.be.bignumber.equal(expectedPremium);
+    }
+};
+
 describe('FeesCalcaultor', () => {
     beforeEach(async () => {
+        await setAccounts();
+
         this.fakePriceProvider = await FakePriceProvider.new(80, {from: admin});
-        this.fakeOracle = await CVIOracle.new(this.fakePriceProvider.address, {from: admin});
+        this.fakeOracle = await CVIOracle.new(this.fakePriceProvider.address, ZERO_ADDRESS, {from: admin});
         this.feesCalculator = await FeesCalculator.new(this.fakeOracle.address, MAX_CVI_VALUE, {from: admin});
+
+        this.feesCalculator.setBuyingPremiumThreshold(MIN_PREMIUM_COLLATERLA_FEE, {from: admin});
 
         this.fakePriceProvider.setPrice(toCVI(5000), {from: admin});
     });
 
     it('sets oracle properly', async () => {
         expect(await this.feesCalculator.cviOracle()).to.equal(this.fakeOracle.address);
-        this.feesCalculator.setOracle(ZERO_ADDRESS, {from: admin});
+        await this.feesCalculator.setOracle(ZERO_ADDRESS, {from: admin});
         expect(await this.feesCalculator.cviOracle()).to.equal(ZERO_ADDRESS);
 
         const currTimestamp = await time.latest();
@@ -101,65 +123,89 @@ describe('FeesCalcaultor', () => {
     it('reverts when attempting to execute an ownable function by non admin user', async () => {
         const expectedError = 'Ownable: caller is not the owner';
         await expectRevert(this.feesCalculator.setOracle(ZERO_ADDRESS, {from: bob}), expectedError);
-
-        //TODO: More functions
     });
 
-    it('updates turbulence only by udpator', async () => {
+    it('updates turbulence only by state udpator', async () => {
         await expectRevert(this.feesCalculator.updateTurbulenceIndicatorPercent(5, 3, 50000, 50000, {from: updator}), 'Not allowed');
         await expectRevert(this.feesCalculator.updateTurbulenceIndicatorPercent(5, 3, 50000, 50000, {from: admin}), 'Not allowed');
         await expectRevert(this.feesCalculator.updateTurbulenceIndicatorPercent(5, 3, 50000, 50000, {from: bob}), 'Not allowed');
 
-        await expectRevert(this.feesCalculator.setTurbulenceUpdator(admin, {from: bob}), 'Ownable: caller is not the owner');
+        await expectRevert(this.feesCalculator.setStateUpdator(admin, {from: bob}), 'Ownable: caller is not the owner');
+        await this.feesCalculator.setStateUpdator(updator, {from: admin});
 
-        await this.feesCalculator.setTurbulenceUpdator(updator, {from: admin});
         await expectRevert(this.feesCalculator.updateTurbulenceIndicatorPercent(5, 3, 50000, 50000, {from: bob}), 'Not allowed');
         await expectRevert(this.feesCalculator.updateTurbulenceIndicatorPercent(5, 3, 50000, 50000, {from: admin}), 'Not allowed');
         await this.feesCalculator.updateTurbulenceIndicatorPercent(5, 3, 50000, 50000, {from: updator});
     });
 
-    //TODO: Create auto-calculation with values for different cases (instead of commented test below)
     it('calculate turbulence indicator percent capped by CVI values relative difference', async () => {
-        let totalHeartbeats = new BN(3);
+        let totalTime = (new BN(3)).mul(toBN(55 * 60));
         let newRounds = new BN(5);
         let lastCVIValue = 10000;
         let currCVIValue = 11500;
 
-        expect(await this.feesCalculator.calculateTurbulenceIndicatorPercent(totalHeartbeats, newRounds, lastCVIValue, currCVIValue)).to.be.bignumber.equal(new BN(200)); //2%
+        expect(await this.feesCalculator.calculateTurbulenceIndicatorPercent(totalTime, newRounds, lastCVIValue, currCVIValue)).to.be.bignumber.equal(new BN(200)); //2%
         currCVIValue = 10200;
-        expect(await this.feesCalculator.calculateTurbulenceIndicatorPercent(totalHeartbeats, newRounds, lastCVIValue, currCVIValue)).to.be.bignumber.equal(new BN(0));
+        expect(await this.feesCalculator.calculateTurbulenceIndicatorPercent(totalTime, newRounds, lastCVIValue, currCVIValue)).to.be.bignumber.equal(new BN(0));
         currCVIValue = 12500;
-        totalHeartbeats = new BN(2);
-        expect(await this.feesCalculator.calculateTurbulenceIndicatorPercent(totalHeartbeats, newRounds, lastCVIValue, currCVIValue)).to.be.bignumber.equal(new BN(300));
+        totalTime = (new BN(2)).mul(toBN(55 * 60));
+        expect(await this.feesCalculator.calculateTurbulenceIndicatorPercent(totalTime, newRounds, lastCVIValue, currCVIValue)).to.be.bignumber.equal(new BN(300));
         currCVIValue = 10500;
-        expect(await this.feesCalculator.calculateTurbulenceIndicatorPercent(totalHeartbeats, newRounds, lastCVIValue, currCVIValue)).to.be.bignumber.equal(new BN(100));
+        expect(await this.feesCalculator.calculateTurbulenceIndicatorPercent(totalTime, newRounds, lastCVIValue, currCVIValue)).to.be.bignumber.equal(new BN(100));
         lastCVIValue = 5000;
         currCVIValue = 5250;
-        expect(await this.feesCalculator.calculateTurbulenceIndicatorPercent(totalHeartbeats, newRounds, lastCVIValue, currCVIValue)).to.be.bignumber.equal(new BN(100));
+        expect(await this.feesCalculator.calculateTurbulenceIndicatorPercent(totalTime, newRounds, lastCVIValue, currCVIValue)).to.be.bignumber.equal(new BN(100));
         currCVIValue = 5000;
         lastCVIValue = 5350;
-        expect(await this.feesCalculator.calculateTurbulenceIndicatorPercent(totalHeartbeats, newRounds, lastCVIValue, currCVIValue)).to.be.bignumber.equal(new BN(100));
+        expect(await this.feesCalculator.calculateTurbulenceIndicatorPercent(totalTime, newRounds, lastCVIValue, currCVIValue)).to.be.bignumber.equal(new BN(100));
     });
 
-    /*it('updates turbelence fee correctly', async () => {
-        await this.feesCalculator.setTurbulenceUpdator(updator, {from: admin});
-        expect(await this.feesCalculator.turbulenceIndicatorPercent()).to.be.bignumber.equal(new BN(0));
-        await validateTurbulenceUpdate([]);
-        await validateTurbulenceUpdate([SECONDS_PER_HOUR]);
-        await validateTurbulenceUpdate([SECONDS_PER_HOUR + 1, SECONDS_PER_HOUR + 2, SECONDS_PER_HOUR + 3]);
-        await validateTurbulenceUpdate([SECONDS_PER_HOUR - 1]);
-        await validateTurbulenceUpdate([SECONDS_PER_HOUR, SECONDS_PER_HOUR, SECONDS_PER_HOUR]);
-        await validateTurbulenceUpdate([SECONDS_PER_HOUR - 1, 1, SECONDS_PER_HOUR, 1000, SECONDS_PER_HOUR + 1]);
-        await validateTurbulenceUpdate([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
-    });*/
+    it('calculates mapped buying premium fee correctly (no volume fee)', async () => {
+        await testBuyingPremiumMapping(COLLATERAL_TO_PREMIUM_FEE_RATIOS);
+    });
 
-    it('calculates buying premium fee correctly', async () => {
-        await this.feesCalculator.setTurbulenceUpdator(updator, {from: admin});
+    it('reverts when setting buying premium fee mapping with bad values number', async () => {
+        const arrayTooSmall = [];
+        for (let i = 0; i < COLLATERAL_TO_PREMIUM_FEE_RATIOS.length - 1; i++) {
+            arrayTooSmall.push(new BN(i));
+        }
+
+        await expectRevert(this.feesCalculator.setCollateralToBuyingPremiumMapping(arrayTooSmall, {from: admin}), 'Bad mapping size');
+
+        const arrayTooBig = [];
+        for (let i = 0; i < COLLATERAL_TO_PREMIUM_FEE_RATIOS.length + 1; i++) {
+            arrayTooBig.push(new BN(i));
+        }
+
+        await expectRevert(this.feesCalculator.setCollateralToBuyingPremiumMapping(arrayTooBig, {from: admin}), 'Bad mapping size');
+    });
+
+    it('sets buying premium fee mapping properly', async () => {
+        const newMapping = [];
+
+        for (let i = 0; i < COLLATERAL_TO_PREMIUM_FEE_RATIOS.length; i++) {
+            newMapping.push(new BN(COLLATERAL_TO_PREMIUM_FEE_RATIOS[i] < 1000 ? COLLATERAL_TO_PREMIUM_FEE_RATIOS[i] + 1 : COLLATERAL_TO_PREMIUM_FEE_RATIOS[i] - 1));
+        }
+
+        await this.feesCalculator.setCollateralToBuyingPremiumMapping(newMapping, {from: admin});
+
+        for (let i = 0; i < COLLATERAL_TO_PREMIUM_FEE_RATIOS.length; i++) {
+            expect(await this.feesCalculator.collateralToBuyingPremiumMapping(i)).to.be.bignumber.equal(newMapping[i]);
+        }
+
+        await this.feesCalculator.setBuyingPremiumThreshold(0, {from: admin});
+        await testBuyingPremiumMapping(newMapping);
+    });
+
+    it('calculates buying premium fee correctly (no volume fee)', async () => {
+        await this.feesCalculator.setStateUpdator(updator, {from: admin});
 
         for (let i = 0; i < premiumFeeTests.length; i++) {
             const test = premiumFeeTests[i];
-            const {fee, feePercentage} = calculatePremiumFee(test.units, test.ratio, test.lastRatio, new BN(0));
-            const result = await this.feesCalculator.calculateBuyingPremiumFee(test.units, 1, test.ratio, test.lastRatio);
+
+            const timestamp = await time.latest();
+            const {fee, feePercentage} = calculatePremiumFee(toBN(0), timestamp, test.units, test.ratio, test.lastRatio, new BN(0), LP_PREMIUM_FEE_PERCENTAGE, MIN_PREMIUM_COLLATERLA_FEE);
+            const result = await this.feesCalculator.calculateBuyingPremiumFee(test.units, 1, test.ratio, test.lastRatio, false);
 
             expect(result[0]).to.be.bignumber.equal(fee);
             expect(result[1]).to.be.bignumber.equal(feePercentage);
@@ -170,9 +216,10 @@ describe('FeesCalcaultor', () => {
 
         for (let i = 0; i < premiumFeeTests.length; i++) {
             const test = premiumFeeTests[i];
-            const {fee, feePercentage} = calculatePremiumFee(test.units, test.ratio, test.lastRatio, new BN(100));
+            const timestamp = await time.latest();
+            const {fee, feePercentage} = calculatePremiumFee(toBN(0), timestamp, test.units, test.ratio, test.lastRatio, new BN(100), LP_PREMIUM_FEE_PERCENTAGE, MIN_PREMIUM_COLLATERLA_FEE);
 
-            const result = await this.feesCalculator.calculateBuyingPremiumFee(test.units, 1, test.ratio, test.lastRatio);
+            const result = await this.feesCalculator.calculateBuyingPremiumFee(test.units, 1, test.ratio, test.lastRatio, false);
 
             expect(result[0]).to.be.bignumber.equal(fee);
             expect(result[1]).to.be.bignumber.equal(feePercentage);

@@ -65,3 +65,30 @@ contract USDCLPStakingRewards is StakingRewards {
         address _stakingToken
     ) StakingRewards(_owner, _rewardsDistribution, _rewardsToken, _stakingToken) {}
 }
+
+contract ETHVOL_USDCLPStakingRewards is StakingRewards {
+    constructor(
+        address _owner,
+        address _rewardsDistribution,
+        address _rewardsToken,
+        address _stakingToken
+    ) StakingRewards(_owner, _rewardsDistribution, _rewardsToken, _stakingToken) {}
+}
+
+contract CVOLUSDCLPStakingRewards is StakingRewards {
+    constructor(
+        address _owner,
+        address _rewardsDistribution,
+        address _rewardsToken,
+        address _stakingToken
+    ) StakingRewards(_owner, _rewardsDistribution, _rewardsToken, _stakingToken) {}
+}
+
+contract ETHVOLUSDCLPStakingRewards is StakingRewards {
+    constructor(
+        address _owner,
+        address _rewardsDistribution,
+        address _rewardsToken,
+        address _stakingToken
+    ) StakingRewards(_owner, _rewardsDistribution, _rewardsToken, _stakingToken) {}
+}

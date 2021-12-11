@@ -19,6 +19,7 @@ contract Liquidation is ILiquidation, Ownable {
     constructor(uint16 _maxCVIValue) {
         maxCVIValue = _maxCVIValue;
     }
+
     function setMinLiquidationThresholdPercents(uint16[MAX_LEVERAGE] calldata _newMinThresholdPercents) external override onlyOwner {
         for (uint256 i = 0; i < MAX_LEVERAGE; i++) {
             require(_newMinThresholdPercents[i] >= liquidationMaxRewardPercents[i], "Threshold less than some max");    

@@ -86,68 +86,104 @@ contract Platform is Initializable, IPlatform, OwnableUpgradeable, ERC20Upgradea
         liquidation = _liquidation;
     }
 
-    function deposit(uint256 _tokenAmount, uint256 _minLPTokenAmount) external virtual override nonReentrant returns (uint256 lpTokenAmount) {
+    function deposit(uint256 _tokenAmount, uint256 _minLPTokenAmount) external virtual override returns (uint256 lpTokenAmount) {
         return _deposit(_tokenAmount, _minLPTokenAmount);
     }
 
-    function withdraw(uint256 _tokenAmount, uint256 _maxLPTokenBurnAmount) external override nonReentrant returns (uint256 burntAmount, uint256 withdrawnAmount) {
+    function withdraw(uint256 _tokenAmount, uint256 _maxLPTokenBurnAmount) external override returns (uint256 burntAmount, uint256 withdrawnAmount) {
         (burntAmount, withdrawnAmount) = _withdraw(_tokenAmount, false, _maxLPTokenBurnAmount);
     }
 
-    function withdrawLPTokens(uint256 _lpTokensAmount) external override nonReentrant returns (uint256 burntAmount, uint256 withdrawnAmount) {
+    function withdrawLPTokens(uint256 _lpTokensAmount) external override returns (uint256 burntAmount, uint256 withdrawnAmount) {
         require(_lpTokensAmount > 0); // "Amount must be positive"
         (burntAmount, withdrawnAmount) = _withdraw(0, true, _lpTokensAmount);
     }
 
-    function increaseSharedPool(uint256 _tokenAmount) external virtual override nonReentrant {
+    function increaseSharedPool(uint256 _tokenAmount) external virtual override {
         _increaseSharedPool(_tokenAmount);
     }
 
-    function openPositionWithoutPremiumFee(uint168 _tokenAmount, uint16 _maxCVI, uint8 _leverage) external override virtual nonReentrant returns (uint168 positionUnitsAmount, uint168 positionedTokenAmount) {
+    function openPositionWithoutPremiumFee(uint168 _tokenAmount, uint16 _maxCVI, uint8 _leverage) external override virtual returns (uint168 positionUnitsAmount, uint168 positionedTokenAmount) {
         require(noPremiumFeeAllowedAddresses[msg.sender]); // "Not allowed"
-        return _openPosition(_tokenAmount, _maxCVI, feesCalculator.openPositionLPFeePercent(), _leverage, false);
+        return _openPosition(_tokenAmount, _maxCVI, 0, _leverage, false, false);
     }
 
-    function openPosition(uint168 _tokenAmount, uint16 _maxCVI, uint16 _maxBuyingPremiumFeePercentage, uint8 _leverage) external override virtual nonReentrant returns (uint168 positionUnitsAmount, uint168 positionedTokenAmount) {
-        return _openPosition(_tokenAmount, _maxCVI, _maxBuyingPremiumFeePercentage, _leverage, true);
+    function openPositionWithoutVolumeFee(uint168 _tokenAmount, uint16 _maxCVI, uint16 _maxBuyingPremiumFeePercentage, uint8 _leverage) external override virtual returns (uint168 positionUnitsAmount, uint168 positionedTokenAmount) {
+        require(noPremiumFeeAllowedAddresses[msg.sender]); // "Not allowed"
+        return _openPosition(_tokenAmount, _maxCVI, _maxBuyingPremiumFeePercentage, _leverage, true, false);
     }
 
-    function closePosition(uint168 _positionUnitsAmount, uint16 _minCVI) external override nonReentrant returns (uint256 tokenAmount) {
+    function openPosition(uint168 _tokenAmount, uint16 _maxCVI, uint16 _maxBuyingPremiumFeePercentage, uint8 _leverage) external override virtual returns (uint168 positionUnitsAmount, uint168 positionedTokenAmount) {
+        return _openPosition(_tokenAmount, _maxCVI, _maxBuyingPremiumFeePercentage, _leverage, true, true);
+    }
+
+    function closePositionWithoutVolumeFee(uint168 _positionUnitsAmount, uint16 _minCVI) external override virtual returns (uint256 tokenAmount) {
+        require(noPremiumFeeAllowedAddresses[msg.sender]); // "Not allowed"
+        return _closePosition(_positionUnitsAmount, _minCVI, 0, false);
+    }
+
+    function closePosition(uint168 _positionUnitsAmount, uint16 _minCVI, uint16 _maxClosingPremiumFeePercentage) external override virtual returns (uint256 tokenAmount) {
+        return _closePosition(_positionUnitsAmount, _minCVI, _maxClosingPremiumFeePercentage, true);
+    }
+
+    function _closePosition(uint168 _positionUnitsAmount, uint16 _minCVI, uint16 _maxClosingPremiumFeePercentage, bool _chargeVolumeFee) private nonReentrant returns (uint256 tokenAmount) {
         require(_positionUnitsAmount > 0); // "Position units not positive"
-        require(_minCVI > 0 && _minCVI <= maxCVIValue, "Bad min CVI value");
+        require(_minCVI > 0 && _minCVI <= maxCVIValue); // "Bad min CVI value"
 
         Position storage position = positions[msg.sender];
 
-        bool isNoLockPositionAddress = noLockPositionAddresses[msg.sender];
-
-        require(position.positionUnitsAmount >= _positionUnitsAmount, "Not enough opened position units");
-        require(block.timestamp - position.creationTimestamp >= buyersLockupPeriod  || isNoLockPositionAddress, "Position locked");
+        require(position.positionUnitsAmount >= _positionUnitsAmount); // "Not enough opened position units"
+        require(block.timestamp - position.creationTimestamp >= buyersLockupPeriod  || noLockPositionAddresses[msg.sender], "Position locked");
 
         (uint16 cviValue, uint256 latestSnapshot,) = updateSnapshots(true);
         require(cviValue >= _minCVI, "CVI too low");
 
-        (uint256 positionBalance, uint256 fundingFees, uint256 marginDebt, bool wasLiquidated) = _closePosition(position, _positionUnitsAmount, latestSnapshot, cviValue);
+        uint256 positionBalance;
+        uint256 fundingFees;
+        uint256 marginDebt;
 
-        // If was liquidated, balance is negative, nothing to return
-        if (wasLiquidated) {
-            return 0;
+        {
+            bool wasLiquidated;
+
+            (positionBalance, fundingFees, marginDebt, wasLiquidated) = _closePosition(position, _positionUnitsAmount, latestSnapshot, cviValue);
+
+            // If was liquidated, balance is negative, nothing to return
+            if (wasLiquidated) {
+                return 0;
+            }
         }
 
-        (uint256 newTotalPositionUnitsAmount, uint256 newTotalFundingFeesAmount) = subtractTotalPositionUnits(_positionUnitsAmount, fundingFees);
-        totalPositionUnitsAmount = newTotalPositionUnitsAmount;
-        totalFundingFeesAmount = newTotalFundingFeesAmount;
+        uint256 lastCollateralRatio = totalPositionUnitsAmount * PRECISION_DECIMALS / totalLeveragedTokensAmount;
+        (totalPositionUnitsAmount, totalFundingFeesAmount) = subtractTotalPositionUnits(_positionUnitsAmount, fundingFees);
+
+        uint256 closingPremiumFeePercentage = 0;
+
+        {
+            if (_chargeVolumeFee) {
+                uint256 collateralRatio = totalPositionUnitsAmount * PRECISION_DECIMALS / (totalLeveragedTokensAmount - positionBalance - marginDebt);
+
+                feesCalculator.updateCloseAdjustedTimestamp(collateralRatio, lastCollateralRatio);
+                closingPremiumFeePercentage = feesCalculator.calculateClosingPremiumFee(positionBalance, collateralRatio, lastCollateralRatio, _chargeVolumeFee);
+
+                require(closingPremiumFeePercentage <= _maxClosingPremiumFeePercentage, "Premium fee too high");
+            } else if (feesCalculator.openPositionLPFeePercent() > 0) {
+                closingPremiumFeePercentage = feesCalculator.closePositionLPFeePercent();
+            }
+        }
+
         position.positionUnitsAmount = position.positionUnitsAmount - _positionUnitsAmount;
 
-        uint256 closePositionFee = positionBalance * feesCalculator.calculateClosePositionFeePercent(position.creationTimestamp, isNoLockPositionAddress) / MAX_FEE_PERCENTAGE;
+        uint256 closePositionFee = positionBalance * feesCalculator.calculateClosePositionFeePercent(position.creationTimestamp, noLockPositionAddresses[msg.sender]) / MAX_FEE_PERCENTAGE;
+        uint256 closingPremiumFee = positionBalance * closingPremiumFeePercentage / MAX_FEE_PERCENTAGE;
 
-        emit ClosePosition(msg.sender, positionBalance + fundingFees, closePositionFee + fundingFees, position.positionUnitsAmount, position.leverage, cviValue);
+        emit ClosePosition(msg.sender, positionBalance + fundingFees, closePositionFee + closingPremiumFee + fundingFees, position.positionUnitsAmount, position.leverage, cviValue);
 
         if (position.positionUnitsAmount == 0) {
             delete positions[msg.sender];
         }
 
-        totalLeveragedTokensAmount = totalLeveragedTokensAmount - positionBalance - marginDebt;
-        tokenAmount = positionBalance - closePositionFee;
+        totalLeveragedTokensAmount = totalLeveragedTokensAmount - positionBalance - marginDebt + closingPremiumFee;
+        tokenAmount = positionBalance - closePositionFee - closingPremiumFee;
 
         collectProfit(closePositionFee);
         transferFunds(tokenAmount);
@@ -185,7 +221,7 @@ contract Platform is Initializable, IPlatform, OwnableUpgradeable, ERC20Upgradea
             }
         }
 
-        require(liquidationOccured, "No liquidatable position");
+        require(liquidationOccured, "No liquidable position");
 
         totalLeveragedTokensAmount = totalLeveragedTokensAmount - finderFeeAmount;
         transferFunds(finderFeeAmount);
@@ -251,23 +287,21 @@ contract Platform is Initializable, IPlatform, OwnableUpgradeable, ERC20Upgradea
     function calculatePositionBalance(address _positionAddress) external view override returns (uint256 currentPositionBalance, bool isPositive, uint168 positionUnitsAmount, uint8 leverage, uint256 fundingFees, uint256 marginDebt) {
         positionUnitsAmount = positions[_positionAddress].positionUnitsAmount;
         leverage = positions[_positionAddress].leverage;
-        require(positionUnitsAmount > 0, "No position for given address");
+        require(positionUnitsAmount > 0); // "No position for given address"
         (currentPositionBalance, isPositive, fundingFees, marginDebt) = _calculatePositionBalance(_positionAddress, true);
     }
 
     function calculatePositionPendingFees(address _positionAddress, uint168 _positionUnitsAmount) external view override returns (uint256 pendingFees) {
         Position memory position = positions[_positionAddress];
+        require(position.positionUnitsAmount > 0); // "No position for given address"
+        require(_positionUnitsAmount <= position.positionUnitsAmount); // "Too many position units"
         pendingFees = _calculateFundingFees(cviSnapshots[position.creationTimestamp], 
             cviSnapshots[latestSnapshotTimestamp], _positionUnitsAmount) + calculateLatestFundingFees(latestSnapshotTimestamp, _positionUnitsAmount);
     }
 
-    function totalBalance() public view override returns (uint256 balance) {
+    function totalBalance(bool _withAddendum) public view override returns (uint256 balance) {
         (uint16 cviValue,,) = cviOracle.getCVILatestRoundData();
-        return _totalBalance(cviValue);
-    }
-
-    function totalBalanceWithAddendum() external view override returns (uint256 balance) {
-        return totalBalance() + calculateLatestFundingFees(latestSnapshotTimestamp, totalPositionUnitsAmount);
+        return _totalBalance(cviValue) + (_withAddendum ? calculateLatestFundingFees(latestSnapshotTimestamp, totalPositionUnitsAmount) : 0);
     }
 
     function calculateLatestTurbulenceIndicatorPercent() external view override returns (uint16) {
@@ -281,35 +315,12 @@ contract Platform is Initializable, IPlatform, OwnableUpgradeable, ERC20Upgradea
         }
     }
 
-    function getLiquidableAddresses(address[] calldata _positionOwners) external view override returns (address[] memory) {
-        address[] memory addressesToLiquidate = new address[](_positionOwners.length);
-
-        uint256 liquidationAddressesAmount = 0;
-        for (uint256 i = 0; i < _positionOwners.length; i++) {
-            (uint256 currentPositionBalance, bool isBalancePositive,, ) = _calculatePositionBalance(_positionOwners[i], true);
-
-            Position memory position = positions[_positionOwners[i]];
-
-            if (position.positionUnitsAmount > 0 && liquidation.isLiquidationCandidate(currentPositionBalance, isBalancePositive, position.positionUnitsAmount, position.openCVIValue, position.leverage)) {
-                addressesToLiquidate[liquidationAddressesAmount] = _positionOwners[i];
-                liquidationAddressesAmount = liquidationAddressesAmount + 1;
-            }
-        }
-
-        address[] memory addressesToActuallyLiquidate = new address[](liquidationAddressesAmount);
-        for (uint256 i = 0; i < liquidationAddressesAmount; i++) {
-            addressesToActuallyLiquidate[i] = addressesToLiquidate[i];
-        }
-
-        return addressesToActuallyLiquidate;
-    }
-
     function collectTokens(uint256 _tokenAmount) internal virtual {
         token.safeTransferFrom(msg.sender, address(this), _tokenAmount);
     }
 
-    function _deposit(uint256 _tokenAmount, uint256 _minLPTokenAmount) internal returns (uint256 lpTokenAmount) {
-        require(_tokenAmount > 0, "Tokens amount must be positive");
+    function _deposit(uint256 _tokenAmount, uint256 _minLPTokenAmount) internal nonReentrant returns (uint256 lpTokenAmount) {
+        require(_tokenAmount > 0); // "Tokens amount must be positive"
         lastDepositTimestamp[msg.sender] = block.timestamp;
 
         (uint16 cviValue,, uint256 cviValueTimestamp) = updateSnapshots(true);
@@ -330,7 +341,7 @@ contract Platform is Initializable, IPlatform, OwnableUpgradeable, ERC20Upgradea
         emit Deposit(msg.sender, _tokenAmount, lpTokenAmount, depositFee);
 
         require(lpTokenAmount >= _minLPTokenAmount, "Too few LP tokens");
-        require(lpTokenAmount > 0, "Too few tokens");
+        require(lpTokenAmount > 0); // "Too few tokens"
 
         totalLeveragedTokensAmount = totalLeveragedTokensAmount + tokenAmountToDeposit;
 
@@ -339,7 +350,7 @@ contract Platform is Initializable, IPlatform, OwnableUpgradeable, ERC20Upgradea
         collectProfit(depositFee);
     }
 
-    function _withdraw(uint256 _tokenAmount, bool _shouldBurnMax, uint256 _maxLPTokenBurnAmount) internal returns (uint256 burntAmount, uint256 withdrawnAmount) {
+    function _withdraw(uint256 _tokenAmount, bool _shouldBurnMax, uint256 _maxLPTokenBurnAmount) internal nonReentrant returns (uint256 burntAmount, uint256 withdrawnAmount) {
         require(lastDepositTimestamp[msg.sender] + lpsLockupPeriod <= block.timestamp, "Funds are locked");
 
         (uint16 cviValue,,) = updateSnapshots(true);
@@ -348,7 +359,7 @@ contract Platform is Initializable, IPlatform, OwnableUpgradeable, ERC20Upgradea
             burntAmount = _maxLPTokenBurnAmount;
             _tokenAmount = burntAmount * _totalBalance(cviValue) / totalSupply();
         } else {
-            require(_tokenAmount > 0, "Tokens amount must be positive");
+            require(_tokenAmount > 0); // "Tokens amount must be positive"
 
             // Note: rounding up (ceiling) the to-burn amount to prevent precision loss
             burntAmount = (_tokenAmount * totalSupply() - 1) / _totalBalance(cviValue) + 1;
@@ -371,7 +382,7 @@ contract Platform is Initializable, IPlatform, OwnableUpgradeable, ERC20Upgradea
         transferFunds(withdrawnAmount);
     }
 
-    function _increaseSharedPool(uint256 _tokenAmount) internal {
+    function _increaseSharedPool(uint256 _tokenAmount) internal nonReentrant {
         require(increaseSharedPoolAllowedAddresses[msg.sender]); // "Not allowed"
         totalLeveragedTokensAmount = totalLeveragedTokensAmount + _tokenAmount;
         collectTokens(_tokenAmount);
@@ -394,11 +405,11 @@ contract Platform is Initializable, IPlatform, OwnableUpgradeable, ERC20Upgradea
         uint16 buyingPremiumFeeMaxPercent;
     }
 
-    function _openPosition(uint168 _tokenAmount, uint16 _maxCVI, uint168 _maxBuyingPremiumFeePercentage, uint8 _leverage, bool _chargePremiumFee) internal returns (uint168 positionUnitsAmount, uint168 positionedTokenAmount) {
-        require(_leverage > 0, "Leverage must be positive");
-        require(_leverage <= maxAllowedLeverage, "Leverage excceeds max allowed");
-        require(_tokenAmount > 0, "Tokens amount must be positive");
-        require(_maxCVI > 0 && _maxCVI <= maxCVIValue, "Bad max CVI value");
+    function _openPosition(uint168 _tokenAmount, uint16 _maxCVI, uint168 _maxBuyingPremiumFeePercentage, uint8 _leverage, bool _chargePremiumFee, bool _chargeVolumeFee) internal nonReentrant returns (uint168 positionUnitsAmount, uint168 positionedTokenAmount) {
+        require(_leverage > 0); // "Leverage must be positive"
+        require(_leverage <= maxAllowedLeverage); // "Leverage excceeds max allowed"
+        require(_tokenAmount > 0); // "Tokens amount must be positive"
+        require(_maxCVI > 0 && _maxCVI <= maxCVIValue); // "Bad max CVI value"
 
         OpenPositionLocals memory locals;
 
@@ -420,7 +431,12 @@ contract Platform is Initializable, IPlatform, OwnableUpgradeable, ERC20Upgradea
             locals.maxPositionUnitsAmount = (uint256(_tokenAmount) - locals.openPositionFee) * _leverage * maxCVIValue / locals.cviValue;
             locals.collateralRatio = (totalPositionUnitsAmount + locals.maxPositionUnitsAmount) * PRECISION_DECIMALS / 
                 (locals.totalLeveragedTokensAmount + (_tokenAmount - locals.openPositionFee) * _leverage);
-            (locals.buyingPremiumFee, locals.buyingPremiumFeePercentage) = feesCalculator.calculateBuyingPremiumFee(_tokenAmount, _leverage, locals.collateralRatio, locals.lastCollateralRatio);
+
+            if (_chargeVolumeFee) {
+                feesCalculator.updateAdjustedTimestamp(locals.collateralRatio, locals.lastCollateralRatio);
+            }
+
+            (locals.buyingPremiumFee, locals.buyingPremiumFeePercentage) = feesCalculator.calculateBuyingPremiumFee(_tokenAmount, _leverage, locals.collateralRatio, locals.lastCollateralRatio, _chargeVolumeFee);
 
             require(locals.buyingPremiumFeePercentage <= _maxBuyingPremiumFeePercentage, "Premium fee too high");
         } else if (feesCalculator.openPositionLPFeePercent() > 0) {
@@ -475,6 +491,7 @@ contract Platform is Initializable, IPlatform, OwnableUpgradeable, ERC20Upgradea
     }
 
     struct MergePositionLocals {
+        uint32 originalCreationTimestamp;
         uint168 oldPositionUnits;
         uint256 newPositionUnits;
         uint256 newTotalPositionUnitsAmount;
@@ -485,6 +502,7 @@ contract Platform is Initializable, IPlatform, OwnableUpgradeable, ERC20Upgradea
         MergePositionLocals memory locals;
 
         locals.oldPositionUnits = _position.positionUnitsAmount;
+        locals.originalCreationTimestamp = _position.originalCreationTimestamp;
         (uint256 currentPositionBalance, uint256 fundingFees, uint256 __marginDebt, bool wasLiquidated) = _closePosition(_position, locals.oldPositionUnits, _latestSnapshot, _cviValue);
         
         // If was liquidated, balance is negative
@@ -492,6 +510,8 @@ contract Platform is Initializable, IPlatform, OwnableUpgradeable, ERC20Upgradea
             currentPositionBalance = 0;
             locals.oldPositionUnits = 0;
             __marginDebt = 0;
+
+            _position.originalCreationTimestamp = locals.originalCreationTimestamp;
         }
 
         locals.newPositionUnits = (currentPositionBalance * _leverage + _leveragedTokenAmount) * maxCVIValue / _cviValue;
@@ -602,13 +622,13 @@ contract Platform is Initializable, IPlatform, OwnableUpgradeable, ERC20Upgradea
         }
     }
 
-    function subtractTotalPositionUnits(uint168 _positionUnitsAmountToSubtract, uint256 _fundingFeesToSubtract) private view returns (uint256 newTotalPositionUnitsAmount, uint256 newTotalFundingFeesAMount) {
+    function subtractTotalPositionUnits(uint168 _positionUnitsAmountToSubtract, uint256 _fundingFeesToSubtract) private view returns (uint256 newTotalPositionUnitsAmount, uint256 newTotalFundingFeesAmount) {
         newTotalPositionUnitsAmount = totalPositionUnitsAmount - _positionUnitsAmountToSubtract;
-        newTotalFundingFeesAMount = totalFundingFeesAmount;
+        newTotalFundingFeesAmount = totalFundingFeesAmount;
         if (newTotalPositionUnitsAmount == 0) {
-            newTotalFundingFeesAMount = 0;
+            newTotalFundingFeesAmount = 0;
         } else {
-            newTotalFundingFeesAMount = newTotalFundingFeesAMount - _fundingFeesToSubtract;
+            newTotalFundingFeesAmount = newTotalFundingFeesAmount - _fundingFeesToSubtract;
         }
     }
 

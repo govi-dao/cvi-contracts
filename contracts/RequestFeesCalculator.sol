@@ -17,7 +17,6 @@ contract RequestFeesCalculator is IRequestFeesCalculator, Ownable {
 
 	uint32 public minWaitTime = 15 minutes;
 
-	//TOOD: Default values
 	uint16 public beforeTargetTimeMaxPenaltyFeePercent = 300;
 	uint16 public afterTargetMidTimePenaltyFeePercent = 300;
 	uint16 public afterTargetMaxTimePenaltyFeePercent = 500;
@@ -33,7 +32,6 @@ contract RequestFeesCalculator is IRequestFeesCalculator, Ownable {
 		if (block.timestamp < _request.targetTimestamp) {
 			// Linear decreasing between beforeTargetTimeMaxPenaltyFeePercent and 0
             require(block.timestamp >= _request.requestTimestamp + minWaitTime, "Min wait time not over");
-            //TOOD: Safe cast?
 			feePercentage = uint16((_request.targetTimestamp - block.timestamp) * beforeTargetTimeMaxPenaltyFeePercent / (_request.targetTimestamp - _request.requestTimestamp - minWaitTime));
 		} else if (block.timestamp < _request.targetTimestamp + afterTargetMidTime) {
 			// Linear increasing between 0 and afterTargetMidTimePenaltyFeePercent

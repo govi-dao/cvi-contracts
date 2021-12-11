@@ -1,13 +1,14 @@
 const {expectRevert, BN} = require('@openzeppelin/test-helpers');
-const {accounts, contract} = require('@openzeppelin/test-environment');
+
 const chai = require('chai');
-const Liquidation = contract.fromArtifact('Liquidation');
+
+const { getAccounts } = require('./utils/DeployUtils.js');
+const { LEVERAGE_TO_THRESHOLD, LEVERAGE_TO_MAX, 
+    LIQUIDATION_MIN_REWARD_PERCENTAGE, LIQUIDATION_MAX_FEE_PERCENTAGE } = require('./utils/PlatformUtils.js');
+
+const Liquidation = artifacts.require('Liquidation');
 
 const expect = chai.expect;
-const [admin, alice] = accounts;
-
-const LIQUIDATION_MIN_REWARD_PERCENT = new BN(5);
-const LIQUIDATION_MAX_FEE_PERCENTAGE = new BN(1000);
 
 const CVI_MAX_VALUE = new BN(22000);
 
@@ -18,10 +19,13 @@ for (let i = 0; i < MAX_LEVERAGE; i++) {
     LEVERAGES[i] = new BN(i + 1);
 }
 
-const LEVERAGE_TO_THRESHOLD = [new BN(50), new BN(50), new BN(100), new BN(100), new BN(150), new BN(150), new BN(200), new BN(200)];
-const LEVERAGE_TO_MAX = [new BN(30), new BN(30), new BN(30), new BN(30), new BN(30), new BN(30), new BN(30), new BN(30)];
-
 const OPEN_CVI_VALUES = [new BN(5000), new BN(10000), new BN(15000), new BN(20000)];
+
+let admin, alice;
+
+const setAccounts = async () => {
+    [admin, alice] = await getAccounts();
+};
 
 const calculateBalanceByPU = (positionUnits, openCVIValue, threshold, leverage = new BN(1)) => {
     const originalBalance = positionUnits.mul(openCVIValue).div(CVI_MAX_VALUE).sub(positionUnits.mul(openCVIValue).div(CVI_MAX_VALUE).mul(leverage.sub(new BN(1))).div(leverage));
@@ -77,6 +81,7 @@ const testLiquidationReward = async (thresholds, minRewardThreshold, maxRewards)
 
 describe('Liquidation', () => {
     beforeEach(async () => {
+        await setAccounts();
         this.liquidation = await Liquidation.new(CVI_MAX_VALUE, {from: admin});
     });
 
@@ -100,7 +105,7 @@ describe('Liquidation', () => {
     });
 
     it('calculates liquidation reward properly', async () => {
-        await testLiquidationReward(LEVERAGE_TO_THRESHOLD, LIQUIDATION_MIN_REWARD_PERCENT, LEVERAGE_TO_MAX);
+        await testLiquidationReward(LEVERAGE_TO_THRESHOLD, LIQUIDATION_MIN_REWARD_PERCENTAGE, LEVERAGE_TO_MAX);
     });
 
     it('returns zero reward if no liquidation', async () => {
@@ -128,15 +133,15 @@ describe('Liquidation', () => {
             expect(await this.liquidation.liquidationMinThresholdPercents(i)).to.be.bignumber.equal(newThresholds[i]);
         }
 
-        await testLiquidationReward(newThresholds, LIQUIDATION_MIN_REWARD_PERCENT, LEVERAGE_TO_MAX);
+        await testLiquidationReward(newThresholds, LIQUIDATION_MIN_REWARD_PERCENTAGE, LEVERAGE_TO_MAX);
     });
 
     it('sets min liquidation reward properly', async () => {
-        expect(await this.liquidation.liquidationMinRewardPercent()).to.be.bignumber.equal(LIQUIDATION_MIN_REWARD_PERCENT);
+        expect(await this.liquidation.liquidationMinRewardPercent()).to.be.bignumber.equal(LIQUIDATION_MIN_REWARD_PERCENTAGE);
 
-        await this.liquidation.setMinLiquidationRewardPercent(LIQUIDATION_MIN_REWARD_PERCENT.div(new BN(2)), {from: admin});
-        expect(await this.liquidation.liquidationMinRewardPercent()).to.be.bignumber.equal(LIQUIDATION_MIN_REWARD_PERCENT.div(new BN(2)));
-        await testLiquidationReward(LEVERAGE_TO_THRESHOLD, LIQUIDATION_MIN_REWARD_PERCENT.div(new BN(2)), LEVERAGE_TO_MAX);
+        await this.liquidation.setMinLiquidationRewardPercent(LIQUIDATION_MIN_REWARD_PERCENTAGE.div(new BN(2)), {from: admin});
+        expect(await this.liquidation.liquidationMinRewardPercent()).to.be.bignumber.equal(LIQUIDATION_MIN_REWARD_PERCENTAGE.div(new BN(2)));
+        await testLiquidationReward(LEVERAGE_TO_THRESHOLD, LIQUIDATION_MIN_REWARD_PERCENTAGE.div(new BN(2)), LEVERAGE_TO_MAX);
     });
 
     it('sets max liquidation reward properly', async () => {
@@ -151,7 +156,7 @@ describe('Liquidation', () => {
             expect(await this.liquidation.liquidationMaxRewardPercents(i)).to.be.bignumber.equal(newMaxRewards[i]);
         }
 
-        await testLiquidationReward(LEVERAGE_TO_THRESHOLD, LIQUIDATION_MIN_REWARD_PERCENT, newMaxRewards);
+        await testLiquidationReward(LEVERAGE_TO_THRESHOLD, LIQUIDATION_MIN_REWARD_PERCENTAGE, newMaxRewards);
     });
 
     it('reverts when setting liquidation threshold to less than max (but not equal)', async () => {
@@ -167,13 +172,13 @@ describe('Liquidation', () => {
     it('reverts when setting liquidation max to less than min (but not equal)', async () => {
         for (let i = 0; i < MAX_LEVERAGE; i++) {
             const newMaxRewards = [...LEVERAGE_TO_MAX];
-            newMaxRewards[i] = LIQUIDATION_MIN_REWARD_PERCENT.sub(new BN(1));
+            newMaxRewards[i] = LIQUIDATION_MIN_REWARD_PERCENTAGE.sub(new BN(1));
             await expectRevert(this.liquidation.setMaxLiquidationRewardPercents(newMaxRewards, {from: admin}), 'Some max less than min');
         }
 
         const allMinRewards = [];
         for (let i = 0; i < MAX_LEVERAGE; i++) {
-            allMinRewards.push(LIQUIDATION_MIN_REWARD_PERCENT);
+            allMinRewards.push(LIQUIDATION_MIN_REWARD_PERCENTAGE);
         }
         await this.liquidation.setMaxLiquidationRewardPercents(allMinRewards, {from: admin});
     });
@@ -196,12 +201,12 @@ describe('Liquidation', () => {
     it('calculates liquidation reward properly with liquidation min equals liquidation max', async () => {
         const newMaxRewards = [];
         for (let i = 0; i < MAX_LEVERAGE; i++) {
-            newMaxRewards.push(LIQUIDATION_MIN_REWARD_PERCENT);
+            newMaxRewards.push(LIQUIDATION_MIN_REWARD_PERCENTAGE);
         }
 
         await this.liquidation.setMaxLiquidationRewardPercents(newMaxRewards, {from: admin});
 
-        await testLiquidationReward(LEVERAGE_TO_THRESHOLD, LIQUIDATION_MIN_REWARD_PERCENT, newMaxRewards);
+        await testLiquidationReward(LEVERAGE_TO_THRESHOLD, LIQUIDATION_MIN_REWARD_PERCENTAGE, newMaxRewards);
     });
 
     it('calculates liquidation reward properly with liquidation max equals liquidation threshold', async () => {
@@ -212,23 +217,23 @@ describe('Liquidation', () => {
 
         await this.liquidation.setMaxLiquidationRewardPercents(newMaxRewards, {from: admin});
 
-        await testLiquidationReward(LEVERAGE_TO_THRESHOLD, LIQUIDATION_MIN_REWARD_PERCENT, newMaxRewards);
+        await testLiquidationReward(LEVERAGE_TO_THRESHOLD, LIQUIDATION_MIN_REWARD_PERCENTAGE, newMaxRewards);
     });
 
     it('calculates liquidation reward properly with liquidation min, max, and threshold are all equal', async () => {
         const newMaxRewards = [];
         for (let i = 0; i < MAX_LEVERAGE; i++) {
-            newMaxRewards.push(LIQUIDATION_MIN_REWARD_PERCENT);
+            newMaxRewards.push(LIQUIDATION_MIN_REWARD_PERCENTAGE);
         }
 
         await this.liquidation.setMaxLiquidationRewardPercents(newMaxRewards, {from: admin});
         await this.liquidation.setMinLiquidationThresholdPercents(newMaxRewards, {from: admin});
 
-        await testLiquidationReward(newMaxRewards, LIQUIDATION_MIN_REWARD_PERCENT, newMaxRewards);
+        await testLiquidationReward(newMaxRewards, LIQUIDATION_MIN_REWARD_PERCENTAGE, newMaxRewards);
     });
 
     it('reverts when not called by owner', async () => {
-        await expectRevert(this.liquidation.setMinLiquidationRewardPercent(LIQUIDATION_MIN_REWARD_PERCENT, {from: alice}), 'Ownable: caller is not the owner');
+        await expectRevert(this.liquidation.setMinLiquidationRewardPercent(LIQUIDATION_MIN_REWARD_PERCENTAGE, {from: alice}), 'Ownable: caller is not the owner');
         await expectRevert(this.liquidation.setMaxLiquidationRewardPercents(LEVERAGE_TO_MAX, {from: alice}), 'Ownable: caller is not the owner');
         await expectRevert(this.liquidation.setMinLiquidationThresholdPercents(LEVERAGE_TO_THRESHOLD, {from: alice}), 'Ownable: caller is not the owner');
     });

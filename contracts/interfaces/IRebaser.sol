@@ -6,7 +6,10 @@ import "./IVolatilityToken.sol";
 
 interface IRebaser {
     function rebase() external;
-    
     function setVolatilityToken(IVolatilityToken volatilityToken) external;
-    function setUniswapPair(IUniswapV2Pair uniswapPair) external;
+    function setUniswapPairs(IUniswapV2Pair[] calldata uniswapPairs) external;
+    function setRebaserAddress(address user, bool isAllowed) external;
+    function setUpkeepInterval(uint32 _upkeepInterval) external;
+    function setUpkeepTimeWindow(uint32 _upkeepTimeWindow) external;
+    function setEnableWhitelist(bool _enableWhitelist) external;
 }

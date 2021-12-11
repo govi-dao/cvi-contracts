@@ -1,31 +1,31 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity ^0.8;
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "./interfaces/IPositionRewards.sol";
-import "./interfaces/IRewardsCollector.sol";
 
-contract PositionRewards is IPositionRewards, IRewardsCollector, Ownable {
+contract PositionRewards is Initializable, IPositionRewards, OwnableUpgradeable {
 
-    using SafeERC20 for IERC20;
+    using SafeERC20Upgradeable for IERC20Upgradeable;
 
     uint256 public constant PRECISION_DECIMALS = 1e10;
 
-    mapping(address => uint256) public unclaimedPositionUnits;
+    mapping(address => mapping(uint32 => uint256)) public claimedPositionUnits;
 
-    uint256 public maxClaimPeriod = 30 days;
-    uint256 public maxRewardTime = 3 days;
-    uint256 public maxRewardTimePercentageGain = 25e8;
+    uint256 public maxClaimPeriod;
+    uint256 public maxRewardTime;
+    uint256 public maxRewardTimePercentageGain;
 
-    uint256 public maxDailyReward = 2300e18;
+    uint256 public maxDailyReward;
 
-    uint256 public maxSingleReward = 800e18;
-    uint256 public rewardMaxLinearPositionUnits = 20e18;
-    uint256 public rewardMaxLinearGOVI = 100e18;
+    uint256 public maxSingleReward;
+    uint256 public rewardMaxLinearPositionUnits;
+    uint256 public rewardMaxLinearGOVI;
 
-    uint256 public rewardFactor = 1e13;
+    uint256 public rewardFactor;
 
     uint256 public lastMaxSingleReward;
     uint256 public lastRewardMaxLinearPositionUnits;
@@ -36,19 +36,22 @@ contract PositionRewards is IPositionRewards, IRewardsCollector, Ownable {
     uint256 public todayClaimedRewards;
     uint256 public lastClaimedDay;
 
-    address public rewarder;
-
-    IERC20 private immutable cviToken;
+    IERC20Upgradeable public cviToken;
 
     IPlatform public platform;
 
-    constructor(IERC20 _cviToken) {
+    function initialize(IERC20Upgradeable _cviToken) public initializer {
+        OwnableUpgradeable.__Ownable_init();
         cviToken = _cviToken;
-    }
 
-    modifier onlyRewarder {
-        require(msg.sender == rewarder, "Not allowed");
-        _;
+        maxClaimPeriod = 30 days;
+        maxRewardTime = 3 days;
+        maxRewardTimePercentageGain = 25e8;
+        maxDailyReward = 2300e18;
+        maxSingleReward = 800e18;
+        rewardMaxLinearPositionUnits = 20e18;
+        rewardMaxLinearGOVI = 100e18;
+        rewardFactor = 1e13;
     }
 
     function calculatePositionReward(uint256 _positionUnits, uint256 _positionTimestamp) external view override returns (uint256 rewardAmount) {
@@ -108,30 +111,23 @@ contract PositionRewards is IPositionRewards, IRewardsCollector, Ownable {
         }
     }
 
-    function reward(address _account, uint256 _positionUnits, uint8 _leverage) external override onlyRewarder {
-        require(_positionUnits > 0, "Position units must be positive");
-        unclaimedPositionUnits[_account] = unclaimedPositionUnits[_account] + _positionUnits / _leverage;
-    }
-
     function claimReward() external override {
         require(address(platform) != address(0), "Platform not set");
 
-        (uint256 positionUnitsAmount, uint8 leverage,, uint256 creationTimestamp,) = platform.positions(msg.sender);
+        (uint256 positionUnitsAmount, uint8 leverage,, uint32 creationTimestamp, uint32 originalCreationTimestamp) = platform.positions(msg.sender);
         require(positionUnitsAmount > 0, "No opened position");
         require(block.timestamp <= creationTimestamp + maxClaimPeriod, "Claim too late");
 
         uint256 today = block.timestamp / 1 days;
-        uint256 positionDay = creationTimestamp / 1 days;
-        require(today > positionDay, "Claim too early");
+        require(today > creationTimestamp / 1 days, "Claim too early");
 
         // Reward position units will be the min from currently open and currently available
         // This resolves the issue of claiming after a merge
-        uint256 rewardPositionUnits = unclaimedPositionUnits[msg.sender];
-        if (positionUnitsAmount / leverage < rewardPositionUnits) {
-            rewardPositionUnits = positionUnitsAmount / leverage;
-        }
+        uint32 positionDay = originalCreationTimestamp / 1 days;
+        uint256 claimedPositions = claimedPositionUnits[msg.sender][positionDay];
 
-        require(rewardPositionUnits > 0, "No reward");
+        require (claimedPositions < positionUnitsAmount / leverage, "No reward");
+        uint256 rewardPositionUnits = positionUnitsAmount / leverage - claimedPositions;
 
         uint256 rewardAmount = _calculatePositionReward(rewardPositionUnits, creationTimestamp);
         uint256 _maxDailyReward = maxDailyReward;
@@ -149,14 +145,10 @@ contract PositionRewards is IPositionRewards, IRewardsCollector, Ownable {
         require(updatedDailyClaimedReward <= _maxDailyReward, "Daily reward spent");
 
         todayClaimedRewards = updatedDailyClaimedReward;
-        unclaimedPositionUnits[msg.sender] = 0;
+        claimedPositionUnits[msg.sender][positionDay] = claimedPositions + rewardPositionUnits;
 
         emit Claimed(msg.sender, rewardAmount);
         cviToken.safeTransfer(msg.sender, rewardAmount);
-    }
-
-    function setRewarder(address _newRewarder) external override onlyOwner {
-        rewarder = _newRewarder;
     }
 
     function setMaxDailyReward(uint256 _newMaxDailyReward) external override onlyOwner {
@@ -202,6 +194,10 @@ contract PositionRewards is IPositionRewards, IRewardsCollector, Ownable {
 
     function setPlatform(IPlatform _newPlatform) external override onlyOwner {
         platform = _newPlatform;
+    }
+
+    function extractRewards() external override onlyOwner {
+        cviToken.safeTransfer(msg.sender, cviToken.balanceOf(address(this)));
     }
 
     function calculateAlphaBetaGamma(uint256 _maxSingleReward, uint256 _rewardMaxLinearX, uint256 _rewardMaxLinearY) private pure returns (uint256 alpha, uint256 beta, uint256 gamma) {

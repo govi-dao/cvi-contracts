@@ -1,59 +1,37 @@
-const {expectRevert, time, BN, balance} = require('@openzeppelin/test-helpers');
-const {accounts, contract} = require('@openzeppelin/test-environment');
+const {expectRevert, expectEvent, time, BN, balance} = require('@openzeppelin/test-helpers');
 const chai = require('chai');
+
+const { getAccounts, ZERO_ADDRESS } = require('./utils/DeployUtils.js');
 const {toBN, toTokenAmount, toCVI} = require('./utils/BNUtils.js');
 const {calculateSingleUnitFee, calculateNextAverageTurbulence} = require('./utils/FeesUtils.js');
 const { print } = require('./utils/DebugUtils');
 
-const ElasticToken = contract.fromArtifact('ElasticToken');
-const TestElasticToken = contract.fromArtifact('TestElasticToken');
+const ElasticToken = artifacts.require('ElasticToken');
+const TestElasticToken = artifacts.require('TestElasticToken');
 
 const expect = chai.expect;
-const [admin, bob, alice, carol] = accounts;
 
 const MAX_CVI_VALUE = new BN(20000);
 const SCALING_FACTOR_DECIMALS = '1000000000000000000000000';
 const DELTA_PRECISION_DECIMALS = '1000000000000000000';
 
-const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+let admin, bob, alice, carol;
 
-const verifyTransferEvent = async (event, sender, receiver, tokenAmount) => {
-    // event Transfer(address indexed from, address indexed to, uint amount);
-    expect(event.event).to.equal('Transfer');
-    expect(event.address).to.equal(admin);
-    expect(event.args.from).to.equal(sender);
-    expect(event.args.to).to.equal(receiver);
-    expect(event.args.amount).to.be.bignumber.equal(tokenAmount);
-};
-
-const verifyApproveEvent = async (event, owner, spender, amount) => {
-    // event Approval(address indexed owner, address indexed spender, uint amount);
-    expect(event.event).to.equal('Approval');
-    expect(event.address).to.equal(admin);
-    expect(event.args.owner).to.equal(owner);
-    expect(event.args.spender).to.equal(spender);
-    expect(event.args.amount).to.be.bignumber.equal(amount);
-};
-
-const verifyRebaseEvent = async (event, epoch, prevScalingFactor, newScalingFactor) => {
-    // event Rebase(uint256 epoch, uint256 prevScalingFactor, uint256 newScalingFactor);
-    expect(event.event).to.equal('Rebase');
-    expect(event.address).to.equal(admin);
-    expect(event.args.epoch).to.equal(epoch);
-    expect(event.args.prevScalingFactor).to.be.bignumber.equal(prevScalingFactor);
-    expect(event.args.newScalingFactor).to.be.bignumber.equal(newScalingFactor);
+const setAccounts = async () => {
+    [admin, bob, alice, carol] = await getAccounts();
 };
 
 describe('Elastic Token', () => {
     beforeEach(async () => {
+        await setAccounts();
         this.testElasticToken = await TestElasticToken.new('TestToken', 'ELT', 18, {from: admin});
     });
 
     it('check burn operation', async () => {
         const tx1 = await this.testElasticToken.mint(alice, 100);
-        verifyTransferEvent(tx1.logs[0], ZERO_ADDRESS, alice, 40);
+        await expectEvent(tx1, 'Transfer', {from: ZERO_ADDRESS, to: alice, amount: toBN(100)});
         const tx2 = await this.testElasticToken.burn(alice, 40);
-        verifyTransferEvent(tx2.logs[0], alice, ZERO_ADDRESS, 40);
+        await expectEvent(tx2, 'Transfer', {from: alice, to: ZERO_ADDRESS, amount: toBN(40)});
 
         //check initSupply
         const initSupply = await this.testElasticToken.initSupply.call();
@@ -87,7 +65,7 @@ describe('Elastic Token', () => {
 
     it('check mint operation', async () => {
         const tx = await this.testElasticToken.mint(alice, 40);
-        verifyTransferEvent(tx.logs[0], ZERO_ADDRESS, alice, 40);
+        await expectEvent(tx, 'Transfer', {from: ZERO_ADDRESS, to: alice, amount: toBN(40)});
 
         const res = await this.testElasticToken.balanceOf(alice);
         await expect(res).to.be.bignumber.equal(new BN(40));
@@ -101,29 +79,29 @@ describe('Elastic Token', () => {
     it('check that transfer and approve events are emitted as expected', async () => {
         await this.testElasticToken.mint(alice, 100);
         const tx1 = await this.testElasticToken.transfer(bob, 40, {from: alice});
-        verifyTransferEvent(tx1.logs[0], alice, bob, 40);
+        await expectEvent(tx1, 'Transfer', {from: alice, to: bob, amount: toBN(40)});
 
         await expect(await this.testElasticToken.balanceOf(alice)).to.be.bignumber.equal(new BN(60));
         await expect(await this.testElasticToken.balanceOf(bob)).to.be.bignumber.equal(new BN(40));
 
         const tx2 = await this.testElasticToken.approve(alice, 10, {from: bob});
-        verifyApproveEvent(tx2.logs[0], bob, alice, 10);
+        await expectEvent(tx2, 'Approval', {owner: bob, spender: alice, amount: toBN(10)});
         const tx3 = await this.testElasticToken.transferFrom(bob, alice, 10, {from: alice});
-        verifyTransferEvent(tx3.logs[0], bob, alice, 10);
+        await expectEvent(tx3, 'Transfer', {from: bob, to: alice, amount: toBN(10)});
 
         await expect(await this.testElasticToken.balanceOf(alice)).to.be.bignumber.equal(new BN(70));
         await expect(await this.testElasticToken.balanceOf(bob)).to.be.bignumber.equal(new BN(30));
 
         await expectRevert.unspecified(this.testElasticToken.transferFrom(bob, alice, 15, {from: alice}));
         const tx4 = await this.testElasticToken.increaseAllowance(alice, 15, {from: bob});
-        verifyApproveEvent(tx4.logs[0], bob, alice, 15);
-        await this.testElasticToken.transferFrom(bob, alice, 5, {from: alice});
+        await expectEvent(tx4, 'Approval', {owner: bob, spender: alice, amount: toBN(15)});
+        await this.testElasticToken.transferFrom(bob, alice, 5, {from: alice}); // Allowance left is 10
 
         await expect(await this.testElasticToken.balanceOf(alice)).to.be.bignumber.equal(new BN(75));
         await expect(await this.testElasticToken.balanceOf(bob)).to.be.bignumber.equal(new BN(25));
 
         const tx5 = await this.testElasticToken.decreaseAllowance(alice, 5, {from: bob});
-        verifyApproveEvent(tx5.logs[0], bob, alice, 10);
+        await expectEvent(tx5, 'Approval', {owner: bob, spender: alice, amount: toBN(5)}); // Allownace decreased from 10 left to 5
         await expectRevert.unspecified(this.testElasticToken.transferFrom(bob, alice, 10, {from: alice}));
         await this.testElasticToken.transferFrom(bob, alice, 5, {from: alice});
 
@@ -185,14 +163,14 @@ describe('Elastic Token', () => {
         await expect(scalingAfter).to.be.bignumber.equal(new BN(SCALING_FACTOR_DECIMALS));
         const timestamp = await time.latest();
 
-        verifyRebaseEvent(tx.logs[0], timestamp, scalingBefore, scalingAfter);
+        await expectEvent(tx, 'Rebase', {epoch: timestamp, prevScalingFactor: scalingBefore, newScalingFactor: scalingAfter});
 
         const tx2 = await this.testElasticToken.rebase(0, false, {from: admin});
         const scalingAfter2 = await this.testElasticToken.scalingFactor();
         await expect(scalingAfter2).to.be.bignumber.equal(new BN(SCALING_FACTOR_DECIMALS));
         const timestamp2 = await time.latest();
 
-        verifyRebaseEvent(tx2.logs[0], timestamp2, scalingBefore, scalingAfter);
+        await expectEvent(tx2, 'Rebase', {epoch: timestamp2, prevScalingFactor: scalingBefore, newScalingFactor: scalingAfter});
     });
 
     it('check rebase operation when delta > 0', async () => {
@@ -210,7 +188,7 @@ describe('Elastic Token', () => {
         const scalingAfter = await this.testElasticToken.scalingFactor();
         await expect(scalingAfter).to.be.bignumber.equal(new BN('1000000000000000012000000'));
         const timestamp = await time.latest();
-        verifyRebaseEvent(tx.logs[0], timestamp, scalingBefore, scalingAfter);
+        await expectEvent(tx, 'Rebase', {epoch: timestamp, prevScalingFactor: scalingBefore, newScalingFactor: scalingAfter});
 
         //check initSupply
         const initSupply = await this.testElasticToken.initSupply.call(); //100
@@ -244,7 +222,7 @@ describe('Elastic Token', () => {
         const scalingAfter = await this.testElasticToken.scalingFactor();
         await expect(scalingAfter).to.be.bignumber.equal(new BN('999999999999999988000000'));
         const timestamp = await time.latest();
-        verifyRebaseEvent(tx.logs[0], timestamp, scalingBefore, scalingAfter);
+        await expectEvent(tx, 'Rebase', {epoch: timestamp, prevScalingFactor: scalingBefore, newScalingFactor: scalingAfter});
 
         //check initSupply
         const initSupply = await this.testElasticToken.initSupply.call(); //100
@@ -268,33 +246,6 @@ describe('Elastic Token', () => {
         await this.testElasticToken.setRebaser(admin, {from: admin});
         const scalingBefore = await this.testElasticToken.scalingFactor();
         await expectRevert.unspecified(this.testElasticToken.rebase(10, true, {from: admin}));
-    });
-
-    it.skip('scaling factor doesnt exceed maxScalingFactor', async () => {
-        await this.testElasticToken.setRebaser(admin, {from: admin});
-        for (let i = 0; i < 100; i++) {
-            await this.testElasticToken.mint(alice, new BN('-1'));
-        }
-        await this.testElasticToken.rebase(new BN('100000000000000000'), true, {from: admin});
-        const scalingAfter = await this.testElasticToken.scalingFactor();
-        await expect(scalingAfter).to.be.bignumber.equal(new BN('1100000000000000000000000'));
-
-        const maxScalingFactor = await this.testElasticToken.maxScalingFactor();
-        await expect(maxScalingFactor).to.be.bignumber.equal(new BN('11579208923731619542357098500868790785326998466564056403945'));
-
-        await this.testElasticToken.rebase(new BN('100000000000000000'), true, {from: admin});
-        const scalingAfter2 = await this.testElasticToken.scalingFactor();
-        await expect(scalingAfter2).to.be.bignumber.equal(new BN('1210000000000000000000000'));
-
-        const maxScalingFactor2 = await this.testElasticToken.maxScalingFactor();
-        await expect(maxScalingFactor2).to.be.bignumber.equal(new BN('11579208923731619542357098500868790785326998466564056403945'));
-
-        for (let i = 0; i < 100; i++) {
-            await this.testElasticToken.rebase(new BN('100000000000000000'), true, {from: admin});
-        }
-
-        const scalingAfter3 = await this.testElasticToken.scalingFactor();
-        await expect(scalingAfter3).to.be.bignumber.equal(new BN('1210000000000000000000000'));
     });
 
     it('reverts when recipient is invalid', async () => {

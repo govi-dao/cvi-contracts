@@ -1,13 +1,12 @@
 const {expectRevert, time, BN} = require('@openzeppelin/test-helpers');
+const {getAccounts} = require('./utils/DeployUtils.js');
 
-const {accounts, contract} = require('@openzeppelin/test-environment');
 const chai = require('chai');
 const expect = chai.expect;
 
-const [admin, bob] = accounts;
 const TEST_AMOUNTS = [0, 500, 1000, 7500, 20000];
 
-const RequestFeesCalculator = contract.fromArtifact('RequestFeesCalculator');
+const RequestFeesCalculator = artifacts.require('RequestFeesCalculator');
 
 const SECONDS_PER_HOUR = 60 * 60;
 
@@ -30,12 +29,19 @@ const MAX_PENALTY_TIME = 12 * SECONDS_PER_HOUR;
 
 const MAX_PERCENTAGE = new BN(10000);
 
+let admin, bob;
+
+const setAccounts = async () => {
+    [admin, bob] = await getAccounts();
+};
+
 const createRequest = (requestType, tokenAmount, timeDelayRequestFeesPercent, maxRequestFeesPercent, owner, requestTimestamp, targetTimestamp) => {
     return {requestType, tokenAmount, timeDelayRequestFeesPercent, maxRequestFeesPercent, owner, requestTimestamp: requestTimestamp.toString(), targetTimestamp: targetTimestamp.toString()};
 };
 
 describe('RequestFeesCalcaultor', () => {
     beforeEach(async () => {
+        await setAccounts();
         this.requestFeesCalculator = await RequestFeesCalculator.new({from: admin});
     });
 

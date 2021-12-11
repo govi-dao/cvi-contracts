@@ -1,14 +1,14 @@
 const {expectRevert, BN, time} = require('@openzeppelin/test-helpers');
-const {accounts, contract} = require('@openzeppelin/test-environment');
 const chai = require('chai');
 
-const CVIOracle = contract.fromArtifact('CVIOracle');
-const FakePriceProvider = contract.fromArtifact('FakePriceProvider');
+const {getAccounts} = require('./utils/DeployUtils.js');
+
+const CVIOracle = artifacts.require('CVIOracle');
+const FakePriceProvider = artifacts.require('FakePriceProvider');
 
 const {toBN, toCVI} = require('./utils/BNUtils.js');
 
 const expect = chai.expect;
-const [admin, alice] = accounts;
 
 const MAX_CVI_VALUE = toBN(200, 18);
 const ETH_VOL_MAX_CVI_VALUE = toBN(220, 18);
@@ -31,7 +31,15 @@ const testRoundData = async (round, cviValue, timestamp) => {
     expect(result[1]).to.be.bignumber.equal(timestamp);
 };
 
+let admin, alice;
+
+const setAccounts = async () => {
+    [admin, alice] = await getAccounts();
+};
+
 const beforeEachPlatform = async (maxCVIValue, maxTruncatedCVIValue) => {
+    await setAccounts();
+
     this.fakePriceProvider = await FakePriceProvider.new(toCVI(5000), {from: admin});
     this.fakeSanityPriceProvider = await FakePriceProvider.new(toCVI(5000), {from: admin});
     this.oracle = await CVIOracle.new(this.fakePriceProvider.address, this.fakeSanityPriceProvider.address, maxCVIValue, {from: admin});
@@ -142,8 +150,8 @@ const setOracleTests = () => {
         await this.oracle.setDeviationCheck(true, {from: admin});
         expect(await this.oracle.maxDeviation()).to.be.bignumber.equal(new BN(1000));
 
-        await this.fakePriceProvider.setPrice(toCVI(5501));
         await this.fakeSanityPriceProvider.setPrice(toCVI(5000));
+        await this.fakePriceProvider.setPrice(toCVI(5501));
         let timestamp = await time.latest();
 
         await expectRevert(testLatestRoundData(new BN(5501), new BN(2), timestamp), 'Deviation too large');
@@ -155,8 +163,8 @@ const setOracleTests = () => {
     it('sets deviation check bool properly and is disabled by default', async () => {
         expect(await this.oracle.deviationCheck()).to.be.false;
 
-        await this.fakePriceProvider.setPrice(toCVI(5000));
         await this.fakeSanityPriceProvider.setPrice(toCVI(6000));
+        await this.fakePriceProvider.setPrice(toCVI(5000));
         let timestamp = await time.latest();
 
         await testLatestRoundData(new BN(5000), new BN(2), timestamp);

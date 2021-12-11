@@ -18,7 +18,7 @@ interface IVolatilityToken {
     }
 
     event SubmitRequest(uint256 requestId, uint8 requestType, address indexed account, uint256 tokenAmount, uint256 submitFeesAmount, uint32 targetTimestamp);
-    event FulfillRequest(uint256 requestId, address indexed account, uint256 fulfillFeesAmount);
+    event FulfillRequest(uint256 requestId, address indexed account, uint256 fulfillFeesAmount, bool isAborted);
     event LiquidateRequest(uint256 requestId, uint8 requestType, address indexed account, address indexed liquidator, uint256 findersFeeAmount);
     event Mint(address indexed account, uint256 tokenAmount, uint256 mintedTokens);
     event CollateralizedMint(address indexed account, uint256 tokenAmount, uint256 mintedTokens, uint256 mintedShortTokens);
@@ -40,6 +40,10 @@ interface IVolatilityToken {
     function setFeesCollector(IFeesCollector newCollector) external;
     function setRequestFeesCalculator(IRequestFeesCalculator newRequestFeesCalculator) external;
     function setCVIOracle(ICVIOracle newCVIOracle) external;
+    function setDeviationPerSingleRebaseLag(uint16 newDeviationPercentagePerSingleRebaseLag) external;
     function setMinDeviation(uint16 newMinDeviationPercentage) external;
-    function setRebaseLag(uint8 newRebaseLag) external;
+    function setMaxDeviation(uint16 newMaxDeviationPercentage) external;
+    function setVerifyTotalRequestsAmount(bool verifyTotalRequestsAmount) external;
+    function setMaxTotalRequestsAmount(uint256 maxTotalRequestsAmount) external;
+    function setCappedRebase(bool newCappedRebase) external;
 }

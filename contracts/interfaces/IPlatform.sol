@@ -30,11 +30,12 @@ interface IPlatform {
     function increaseSharedPool(uint256 tokenAmount) external;
 
     function openPositionWithoutPremiumFee(uint168 tokenAmount, uint16 maxCVI, uint8 leverage) external returns (uint168 positionUnitsAmount, uint168 positionedTokenAmount);
+    function openPositionWithoutVolumeFee(uint168 tokenAmount, uint16 maxCVI, uint16 maxBuyingPremiumFeePercentage, uint8 leverage) external returns (uint168 positionUnitsAmount, uint168 positionedTokenAmount);
     function openPosition(uint168 tokenAmount, uint16 maxCVI, uint16 maxBuyingPremiumFeePercentage, uint8 leverage) external returns (uint168 positionUnitsAmount, uint168 positionedTokenAmount);
-    function closePosition(uint168 positionUnitsAmount, uint16 minCVI) external returns (uint256 tokenAmount);
+    function closePosition(uint168 positionUnitsAmount, uint16 minCVI, uint16 maxClosingPremiumFeePercentage) external returns (uint256 tokenAmount);
+    function closePositionWithoutVolumeFee(uint168 positionUnitsAmount, uint16 minCVI) external returns (uint256 tokenAmount);
 
     function liquidatePositions(address[] calldata positionOwners) external returns (uint256 finderFeeAmount);
-    function getLiquidableAddresses(address[] calldata positionOwners) external view returns (address[] memory);
 
     function setAddressSpecificParameters(address holderAddress, bool shouldLockPosition, bool noPremiumFeeAllowed, bool increaseSharedPoolAllowed) external;
 
@@ -55,8 +56,7 @@ interface IPlatform {
     function calculatePositionBalance(address positionAddress) external view returns (uint256 currentPositionBalance, bool isPositive, uint168 positionUnitsAmount, uint8 leverage, uint256 fundingFees, uint256 marginDebt);
     function calculatePositionPendingFees(address positionAddress, uint168 positionUnitsAmount) external view returns (uint256 pendingFees);
 
-    function totalBalance() external view returns (uint256 balance);
-    function totalBalanceWithAddendum() external view returns (uint256 balance);
+    function totalBalance(bool _withAddendum) external view returns (uint256 balance);
 
     function calculateLatestTurbulenceIndicatorPercent() external view returns (uint16);
 

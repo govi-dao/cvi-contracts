@@ -1,23 +1,29 @@
 const {expectRevert, time, BN, balance, send} = require('@openzeppelin/test-helpers');
-const {accounts, contract, web3} = require('@openzeppelin/test-environment');
 const chai = require('chai');
 
 const {toTokenAmount, toBN} = require('./utils/BNUtils.js');
+const {getAccounts} = require('./utils/DeployUtils.js');
 
-const Staking = contract.fromArtifact('Staking');
-const FakeERC20 = contract.fromArtifact('FakeERC20');
-const FakeWETH = contract.fromArtifact('FakeWETH');
-const FakeExchange = contract.fromArtifact('FakeExchange');
-const UniswapSwapper = contract.fromArtifact('UniswapSwapper');
-const ETHStakingProxy = contract.fromArtifact('ETHStakingProxy');
+const Staking = artifacts.require('Staking');
+const FakeERC20 = artifacts.require('FakeERC20');
+const FakeWETH = artifacts.require('FakeWETH');
+const FakeExchange = artifacts.require('FakeExchange');
+const UniswapSwapper = artifacts.require('UniswapSwapper');
+const ETHStakingProxy = artifacts.require('ETHStakingProxy');
 
 const expect = chai.expect;
-const [admin, bob, alice, carol] = accounts;
 
 const TO_WETH_RATE = toBN(1, 4);
 const PRECISION_DECIMALS = toBN(1, 18);
+const CONVERSION_PRECISION_DECIMALS = toBN(1, 4);
 
 const GAS_PRICE = toBN(1, 10);
+
+let admin, bob, alice, carol;
+
+const setAccounts = async () => {
+    [admin, bob, alice, carol] = await getAccounts();
+};
 
 const sendProfitAndValidate = async (token, account, amount, recipient, isProfit) => {
     const beforeProfit = await this.staking.totalProfits(token.address);
@@ -149,12 +155,14 @@ const testAddAndRemoveTokens = async (addToken, removeToken, getTokens) => {
 
 describe('Staking', () => {
     beforeEach(async () => {
+        await setAccounts();
+
         this.cviToken = await FakeERC20.new('CVI', 'CVI', toTokenAmount(1000000000), 18, {from: admin});
         this.wethToken = await FakeWETH.new('WETH', 'WETH', toTokenAmount(1000000000000000), 18, {from: admin});
         this.cotiToken = await FakeERC20.new('COTI', 'COTI', toTokenAmount(1000000000), 18, {from: admin});
         this.daiToken = await FakeERC20.new('DAI', 'DAI', toTokenAmount(1000000000), 18, {from: admin});
         this.usdtToken = await FakeERC20.new('USDT', 'USDT', toTokenAmount(1000000000), 18, {from: admin});
-        this.fakeExchange = await FakeExchange.new(this.wethToken.address, TO_WETH_RATE, {from: admin});
+        this.fakeExchange = await FakeExchange.new(this.wethToken.address, TO_WETH_RATE.div(CONVERSION_PRECISION_DECIMALS), {from: admin});
         this.wethToken.transfer(this.fakeExchange.address, toTokenAmount(1000000000), {from: admin});
         this.swapper = await UniswapSwapper.new(this.fakeExchange.address, {from: admin});
         this.staking = await Staking.new(this.cviToken.address, this.wethToken.address, this.swapper.address, {from: admin});
@@ -545,10 +553,6 @@ describe('Staking', () => {
     it('claims all profits including eth for weth token properly', async() => {
         await this.wethToken.deposit({from: admin, value: web3.utils.toWei('10')});
         await testClaimProfit([this.daiToken, this.usdtToken, this.wethToken], amount => toBN(amount, 13));
-    });
-
-    it('claims correct profit for each token', async() => {
-
     });
 
     it('reverts when no funds to convert', async() => {

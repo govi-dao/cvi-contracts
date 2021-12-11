@@ -1,3 +1,6 @@
+.DS_Store
+artifacts/
+cache/
 node_modules/
 .vscode/*
 !.vscode/settings.json

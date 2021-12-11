@@ -20,27 +20,42 @@ contract VolatilityToken is Initializable, IVolatilityToken, ReentrancyGuardUpgr
     uint16 public constant MAX_PERCENTAGE = 10000;
 
     uint8 public leverage;
-    uint8 public rebaseLag;
+    uint8 private rebaseLag; // Obsolete
 
     uint16 public minDeviationPercentage;
 
     uint256 public initialTokenToLPTokenRate;
 
-    IERC20Upgradeable private token;
-    IPlatform private platform;
-    IFeesCollector private feesCollector;
-    IFeesCalculator private feesCalculator;
-    IRequestFeesCalculator private requestFeesCalculator;
-    ICVIOracle private cviOracle;
+    IERC20Upgradeable public token;
+    IPlatform public platform;
+    IFeesCollector public feesCollector;
+    IFeesCalculator public feesCalculator;
+    IRequestFeesCalculator public requestFeesCalculator;
+    ICVIOracle public cviOracle;
 
     uint256 private nextRequestId;
 
     mapping(uint256 => Request) public requests;
 
-    function initialize(IERC20Upgradeable _token, string memory _lpTokenName, string memory _lpTokenSymbolName, uint8 _leverage, uint256 _initialTokenToLPTokenRate, 
+    uint256 public totalRequestsAmount;
+    uint256 public maxTotalRequestsAmount;
+    bool public verifyTotalRequestsAmount;
+
+    uint16 public deviationPerSingleRebaseLag;
+    uint16 public maxDeviationPercentage;
+
+    bool public cappedRebase;
+
+    uint256 public constant PRECISION_DECIMALS = 1e10;
+    uint256 public constant CVI_DECIMALS_FIX = 100;
+
+    function initialize(IERC20Upgradeable _token, string memory _lpTokenName, string memory _lpTokenSymbolName, uint8 _leverage, uint256 _initialTokenToVolTokenRate, 
             IPlatform _platform, IFeesCollector _feesCollector, IFeesCalculator _feesCalculator, IRequestFeesCalculator _requestFeesCalculator, ICVIOracle _cviOracle) public initializer {
-        rebaseLag = 2;
         minDeviationPercentage = 100;
+        deviationPerSingleRebaseLag = 1000;
+        maxDeviationPercentage = 5000;
+        cappedRebase = true;
+
         nextRequestId = 1;
 
         ElasticToken.__ElasticToken_init(_lpTokenName, _lpTokenSymbolName, 18);
@@ -52,41 +67,52 @@ contract VolatilityToken is Initializable, IVolatilityToken, ReentrancyGuardUpgr
         feesCalculator = _feesCalculator;
         requestFeesCalculator = _requestFeesCalculator;
         cviOracle = _cviOracle;
-        initialTokenToLPTokenRate = _initialTokenToLPTokenRate;
+        initialTokenToLPTokenRate = _initialTokenToVolTokenRate;
         leverage = _leverage;
+
+        totalRequestsAmount = 0;
+        maxTotalRequestsAmount = 1e11;
+        verifyTotalRequestsAmount = true;
 
         if (address(token) != address(0)) {
             token.safeApprove(address(_platform), type(uint256).max);
             token.safeApprove(address(_feesCollector), type(uint256).max);
         }
-    }    
+    }
 
     // If not rebaser, the rebase underlying method will revert
     function rebaseCVI() external override {
         (uint256 balance, bool isBalancePositive,,,,) = platform.calculatePositionBalance(address(this));
         require(isBalancePositive, "Negative balance");
 
-        uint256 positionValue = balance * initialTokenToLPTokenRate * (10**(ERC20Upgradeable(address(token)).decimals())) / totalSupply;
+        // Note: the price is measured by token units, so we want its decimals on the position value as well, as precision decimals
+        // We use the rate multiplication to have balance / totalSupply be done with matching decimals
+        uint256 positionValue = balance * initialTokenToLPTokenRate * PRECISION_DECIMALS / totalSupply;
 
         (uint256 cviValueOracle,,) = cviOracle.getCVILatestRoundData();
-        uint256 cviValue = cviValueOracle * (10**(ERC20Upgradeable(address(token)).decimals())) / 100;
+        uint256 cviValue = cviValueOracle * PRECISION_DECIMALS / CVI_DECIMALS_FIX;
 
-        uint256 deviation = positionValue > cviValue ? positionValue - cviValue : cviValue - positionValue;
-        bool positive = positionValue > cviValue;
+        require(cviValue > positionValue, "Positive rebase disallowed");
+        uint256 deviation = cviValue - positionValue;
 
-        if (rebaseLag > 1) {
-            deviation = deviation / rebaseLag;
-            cviValue = positive ? positionValue - deviation : positionValue + deviation;
+        require(!cappedRebase || deviation >= cviValue * minDeviationPercentage / MAX_PERCENTAGE, "Not enough deviation");
+        require(!cappedRebase || deviation <= cviValue * maxDeviationPercentage / MAX_PERCENTAGE, "Deviation too big");
+
+        // Note: rounding up (ceiling) the rebase lag so it is >= 1 and bumps by 1 for every deviationPerSingleRebaseLag percentage
+        uint256 rebaseLagNew = cappedRebase ? (deviation * MAX_PERCENTAGE - 1) / (cviValue * deviationPerSingleRebaseLag) + 1 : 1;
+
+        if (rebaseLagNew > 1) {
+            deviation = deviation / rebaseLagNew;
+            cviValue = positionValue + deviation;
         }
-
-        require(deviation >= cviValue * minDeviationPercentage / MAX_PERCENTAGE, "Not enough deviation");
 
         uint256 delta = DELTA_PRECISION_DECIMALS * deviation / cviValue;
 
-        rebase(delta, positive);
+        rebase(delta, false);
     }
 
     function submitMintRequest(uint168 _tokenAmount, uint32 _timeDelay) external virtual override nonReentrant returns (uint256 requestId) {
+        require(!verifyTotalRequestsAmount || _tokenAmount + totalRequestsAmount <= maxTotalRequestsAmount, "Total requests amount exceeded");
         return submitRequest(MINT_REQUEST_TYPE, _tokenAmount, _timeDelay);
     }
 
@@ -96,64 +122,52 @@ contract VolatilityToken is Initializable, IVolatilityToken, ReentrancyGuardUpgr
 
     function fulfillMintRequest(uint256 _requestId, uint16 _maxBuyingPremiumFeePercentage) public virtual override nonReentrant returns (uint256 tokensMinted) {
         Request memory request = requests[_requestId];
-        (uint168 amountToFulfill, uint168 fulfillFees,, bool wasLiquidated) = preFulfillRequest(_requestId, request, MINT_REQUEST_TYPE);
+        (uint168 amountToFulfill, uint168 fulfillFees,, bool wasLiquidated,,,) = preFulfillRequest(_requestId, request, MINT_REQUEST_TYPE, false);
 
         if (!wasLiquidated) {
             delete requests[_requestId];
             tokensMinted = mintTokens(amountToFulfill, false, _maxBuyingPremiumFeePercentage);
 
-            emit FulfillRequest(_requestId, msg.sender, fulfillFees);
+            emit FulfillRequest(_requestId, msg.sender, fulfillFees, false);
         }
     }
 
     function fulfillBurnRequest(uint256 _requestId) external override nonReentrant returns (uint256 tokensReceived) {
         Request memory request = requests[_requestId];
-        (uint168 amountToFulfill,, uint16 fulfillFeesPercentage, bool wasLiquiudated) = preFulfillRequest(_requestId, request, BURN_REQUEST_TYPE);
+        (uint168 amountToFulfill,, uint16 fulfillFeesPercentage, bool wasLiquidated,,,) = preFulfillRequest(_requestId, request, BURN_REQUEST_TYPE, false);
 
-        if (!wasLiquiudated) {
+        if (!wasLiquidated) {
             delete requests[_requestId];
 
             uint256 fulfillFees;
             (tokensReceived, fulfillFees) = burnTokens(amountToFulfill, request.timeDelayRequestFeesPercent, fulfillFeesPercentage);
 
-            emit FulfillRequest(_requestId,  msg.sender, fulfillFees);
+            emit FulfillRequest(_requestId,  msg.sender, fulfillFees, false);
         }
     }
 
     function fulfillCollateralizedMintRequest(uint256 _requestId) public virtual override nonReentrant returns (uint256 tokensMinted, uint256 shortTokensMinted) {
         Request memory request = requests[_requestId];
-        (uint168 amountToFulfill, uint168 fulfillFees,, bool wasLiquidated) = preFulfillRequest(_requestId, request, MINT_REQUEST_TYPE);
+        (, uint168 fulfillFees,, bool wasLiquidated, uint168 depositAmount, uint168 mintAmount, bool shouldAbort) = preFulfillRequest(_requestId, request, MINT_REQUEST_TYPE, true);
 
         if (!wasLiquidated) {
             delete requests[_requestId];
-            (tokensMinted, shortTokensMinted) = mintCollateralizedTokens(amountToFulfill);
 
-            emit FulfillRequest(_requestId, msg.sender, fulfillFees);
+            if (shouldAbort) {
+                token.safeTransfer(msg.sender, request.tokenAmount * request.maxRequestFeesPercent / MAX_PERCENTAGE);
+            } else {
+                (tokensMinted, shortTokensMinted) = mintCollateralizedTokens(mintAmount, depositAmount);
+            }
+
+            emit FulfillRequest(_requestId, msg.sender, fulfillFees, shouldAbort);
         }
     }
 
     function liquidateRequest(uint256 _requestId) external override nonReentrant returns (uint256 findersFeeAmount) {
         Request memory request = requests[_requestId];
+        require(request.requestType != 0, "Request id not found");
         require(requestFeesCalculator.isLiquidable(request), "Not liquidable");
         findersFeeAmount = _liquidateRequest(_requestId, request);
-    }
-
-    function _liquidateRequest(uint256 _requestId, Request memory _request) private returns (uint256 findersFeeAmount) {
-        uint168 timeDelayFeeAmount = _request.tokenAmount * _request.timeDelayRequestFeesPercent / MAX_PERCENTAGE;
-        uint168 maxFeesAmount = _request.tokenAmount * _request.maxRequestFeesPercent / MAX_PERCENTAGE;
-        uint256 leftAmount = timeDelayFeeAmount + maxFeesAmount;
-
-        if (_request.requestType == BURN_REQUEST_TYPE) {
-            leftAmount = _burnTokens(leftAmount);
-        }
-
-        findersFeeAmount = requestFeesCalculator.calculateFindersFee(leftAmount);
-        delete requests[_requestId];
-
-        sendProfit(leftAmount - findersFeeAmount, token);
-        transferFunds(findersFeeAmount);
-
-        emit LiquidateRequest(_requestId, _request.requestType, _request.owner, msg.sender, findersFeeAmount);
     }
 
     function setPlatform(IPlatform _newPlatform) external override onlyOwner {
@@ -192,12 +206,28 @@ contract VolatilityToken is Initializable, IVolatilityToken, ReentrancyGuardUpgr
         cviOracle = _newCVIOracle;
     }
 
-    function setRebaseLag(uint8 _newRebaseLag) external override onlyOwner {
-        rebaseLag = _newRebaseLag;
+    function setDeviationPerSingleRebaseLag(uint16 _newDeviationPercentagePerSingleRebaseLag) external override onlyOwner {
+        deviationPerSingleRebaseLag = _newDeviationPercentagePerSingleRebaseLag;
     }
 
     function setMinDeviation(uint16 _newMinDeviationPercentage) external override onlyOwner {
         minDeviationPercentage = _newMinDeviationPercentage;
+    }
+
+    function setMaxDeviation(uint16 _newMaxDeviationPercentage) external override onlyOwner {
+        maxDeviationPercentage = _newMaxDeviationPercentage;
+    }
+
+    function setVerifyTotalRequestsAmount(bool _verifyTotalRequestsAmount) external override onlyOwner {
+        verifyTotalRequestsAmount = _verifyTotalRequestsAmount;
+    }
+
+    function setMaxTotalRequestsAmount(uint256 _maxTotalRequestsAmount) external override onlyOwner {
+        maxTotalRequestsAmount = _maxTotalRequestsAmount;
+    }
+
+    function setCappedRebase(bool _newCappedRebase) external override onlyOwner {
+        cappedRebase = _newCappedRebase;
     }
 
     function submitRequest(uint8 _type, uint168 _tokenAmount, uint32 _timeDelay) internal returns (uint requestId) {
@@ -206,22 +236,34 @@ contract VolatilityToken is Initializable, IVolatilityToken, ReentrancyGuardUpgr
         uint16 timeDelayFeePercent = requestFeesCalculator.calculateTimeDelayFee(_timeDelay);
         uint16 maxFeesPercent = requestFeesCalculator.getMaxFees();
 
-        uint256 timeDelayFeeAmount = _tokenAmount * timeDelayFeePercent / MAX_PERCENTAGE;
-        uint256 maxFeesAmount = _tokenAmount * maxFeesPercent / MAX_PERCENTAGE;
+        // Converting to underlying value in case of burn request, to support rebasing until fulfill
+        uint168 updatedTokenAmount = _tokenAmount;
+        if (_type == BURN_REQUEST_TYPE) {
+            uint256 __updatedTokenAmount = valueToUnderlying(_tokenAmount);
+            require(uint168(__updatedTokenAmount) == __updatedTokenAmount);
+            updatedTokenAmount = uint168(__updatedTokenAmount);
+        }
+
+        uint256 timeDelayFeeAmount = updatedTokenAmount * timeDelayFeePercent / MAX_PERCENTAGE;
+        uint256 maxFeesAmount = updatedTokenAmount * maxFeesPercent / MAX_PERCENTAGE;
 
         requestId = nextRequestId;
         nextRequestId = nextRequestId + 1; // Overflow allowed to keep id cycling
 
         uint32 targetTimestamp = uint32(block.timestamp + _timeDelay);
 
-        requests[requestId] = Request(_type, _tokenAmount, timeDelayFeePercent, maxFeesPercent, msg.sender, uint32(block.timestamp), targetTimestamp);
+        requests[requestId] = Request(_type, updatedTokenAmount, timeDelayFeePercent, maxFeesPercent, msg.sender, uint32(block.timestamp), targetTimestamp);
 
-        emit SubmitRequest(requestId, _type, msg.sender, _tokenAmount, timeDelayFeeAmount, targetTimestamp);
+        if (_type != BURN_REQUEST_TYPE) {
+            totalRequestsAmount = totalRequestsAmount + _tokenAmount;
+        }
 
-        collectRelevantTokens(_type, timeDelayFeeAmount + maxFeesAmount);
+        emit SubmitRequest(requestId, _type, msg.sender, _tokenAmount, _type == BURN_REQUEST_TYPE ? underlyingToValue(timeDelayFeeAmount) : timeDelayFeeAmount, targetTimestamp);
+
+        collectRelevantTokens(_type, _type == BURN_REQUEST_TYPE ? underlyingToValue(timeDelayFeeAmount + maxFeesAmount) : timeDelayFeeAmount + maxFeesAmount);
     }
 
-    function preFulfillRequest(uint256 _requestId, Request memory _request, uint8 _expectedType) private returns (uint168 amountToFulfill, uint168 fulfillFees, uint16 fulfillFeesPercentage, bool wasLiquidated) {
+    function preFulfillRequest(uint256 _requestId, Request memory _request, uint8 _expectedType, bool _isCollateralized) private returns (uint168 amountToFulfill, uint168 fulfillFees, uint16 fulfillFeesPercentage, bool wasLiquidated, uint168 depositAmount, uint168 mintAmount, bool shouldAbort) {
         require(_request.owner == msg.sender, "Not owner");
         require(_request.requestType == _expectedType, "Wrong request type");
 
@@ -230,17 +272,34 @@ contract VolatilityToken is Initializable, IVolatilityToken, ReentrancyGuardUpgr
             wasLiquidated = true;
         } else {
             fulfillFeesPercentage = requestFeesCalculator.calculateTimePenaltyFee(_request);
-            uint168 timeDelayFees = _request.tokenAmount * _request.timeDelayRequestFeesPercent / MAX_PERCENTAGE;
 
-            uint256 tokensLeftToTransfer = _request.tokenAmount - timeDelayFees - (_request.tokenAmount * _request.maxRequestFeesPercent / MAX_PERCENTAGE);
+            uint168 timeDelayFees = _request.tokenAmount * _request.timeDelayRequestFeesPercent / MAX_PERCENTAGE;
+            uint256 tokensLeftToTransfer = getUpdatedTokenAmount(_request.requestType, _request.tokenAmount - timeDelayFees - (_request.tokenAmount * _request.maxRequestFeesPercent / MAX_PERCENTAGE));
+
+            if (_request.requestType != BURN_REQUEST_TYPE) {
+                subtractTotalRequestAmount(_request.tokenAmount);
+            }
+
+            if (_request.requestType == MINT_REQUEST_TYPE) {
+                fulfillFees = _request.tokenAmount * fulfillFeesPercentage / MAX_PERCENTAGE;
+                amountToFulfill = _request.tokenAmount - timeDelayFees - fulfillFees;
+
+                if (_isCollateralized) {
+                    bool isPossible;
+                    (mintAmount, depositAmount, isPossible) = calculateCollateralizedAmounts(amountToFulfill);
+
+                    if (!isPossible) {
+                        return (0, 0, 0, false, 0, 0, true);
+                    }
+                }
+            }
+
             collectRelevantTokens(_request.requestType, tokensLeftToTransfer);
 
             if (_request.requestType == BURN_REQUEST_TYPE) {
-                amountToFulfill = _request.tokenAmount;
+                amountToFulfill = getUpdatedTokenAmount(_request.requestType, _request.tokenAmount);
             } else {
-                fulfillFees = _request.tokenAmount * fulfillFeesPercentage / MAX_PERCENTAGE;
-                amountToFulfill = _request.tokenAmount - timeDelayFees - fulfillFees;
-                sendProfit(timeDelayFees + fulfillFees, token);
+                feesCollector.sendProfit(timeDelayFees + fulfillFees, IERC20(address(token)));
             }
         }
     }
@@ -258,6 +317,7 @@ contract VolatilityToken is Initializable, IVolatilityToken, ReentrancyGuardUpgr
         uint256 supply = totalSupply;
 
         (, uint256 positionedTokenAmount) = openPosition(_tokenAmount, !_isCollateralized, _maxBuyingPremiumFeePercentage);
+        positionedTokenAmount = positionedTokenAmount / leverage; // To get actual money put, excluding margin debt
    
         if (supply > 0 && balance > 0) {
             tokensMinted = positionedTokenAmount * supply / balance;
@@ -279,10 +339,10 @@ contract VolatilityToken is Initializable, IVolatilityToken, ReentrancyGuardUpgr
 
         uint256 timeDelayFee = tokensReceived * _timeDelayFeesPercentage / MAX_PERCENTAGE;
         fulfillFees = tokensReceived * _fulfillFeesPercentage / MAX_PERCENTAGE;
-        sendProfit(fulfillFees + timeDelayFee, token);
-
         tokensReceived = tokensReceived - fulfillFees - timeDelayFee;
-        transferFunds(tokensReceived);
+
+        feesCollector.sendProfit(fulfillFees + timeDelayFee, IERC20(address(token)));
+        token.safeTransfer(msg.sender, tokensReceived);
 
         emit Burn(msg.sender, tokensReceived, _tokenAmount);
     }
@@ -295,38 +355,104 @@ contract VolatilityToken is Initializable, IVolatilityToken, ReentrancyGuardUpgr
         require(positionUnits == uint168(positionUnits), "Too much position units");
 
         if (positionUnits > 0) {
-            tokensReceived = platform.closePosition(uint168(positionUnits), 1);
+            tokensReceived = platform.closePositionWithoutVolumeFee(uint168(positionUnits), 1);
         }
 
-        _burn(address(this), _tokenAmount);
+        // Note: Moving to underlying and back in case rebase occured, and trying to burn too much because of rounding
+        _burn(address(this), underlyingToValue(valueToUnderlying(_tokenAmount)));
     }
 
-    function mintCollateralizedTokens(uint168 _tokenAmount) private returns (uint256 tokensMinted, uint256 shortTokensMinted) {
+    function calculateCollateralizedAmounts(uint168 _tokenAmount) private view returns (uint168 mintAmount, uint168 depositAmount, bool isPossible) {
         (uint256 cviValue,,) = cviOracle.getCVILatestRoundData();
         uint256 openFee = feesCalculator.openPositionFeePercent() + feesCalculator.openPositionLPFeePercent();
         uint256 depositFee = feesCalculator.depositFeePercent();
         uint256 maxCVIValue = platform.maxCVIValue();
 
+        uint256 currentGain = 0;
+
+        {
+            (uint168 positionUnitsAmount,, uint16 openCVIValue,,) = platform.positions(address(this));
+
+            if (positionUnitsAmount != 0) {
+                (uint256 currentBalance, bool isBalancePositive,,,, uint256 marginDebt) = platform.calculatePositionBalance(address(this));
+
+                uint256 originalBalance = positionUnitsAmount * openCVIValue / maxCVIValue;
+
+                if (isBalancePositive && currentBalance > originalBalance - marginDebt) {
+                    currentGain = currentBalance - (originalBalance - marginDebt);
+                }
+            }
+        }
+
         // Note: calculate the deposit/mint amount so that the deposit is exactly (MAX_CVI_VALUE / cviValue - 1) times bigger than the rest of amount that will be used to open a position
         // Therefore, liquidity is fully provided along, allowing to not charge premium fees
-        // Note: The mint amount is calculated first, as it can be truncated with div, thus being a bit smaller, making the deposit amount a bit bigger, so liquidity coverage is assured.
-        uint256 nominator = cviValue * (MAX_PERCENTAGE - depositFee) * _tokenAmount;
-        uint256 mintAmount = nominator / (cviValue * openFee + maxCVIValue * MAX_PERCENTAGE - openFee * maxCVIValue - depositFee * cviValue);
+        // Note: The mint amount is calculated first, as it can be truncated with div, thus being a bit smaller, making the deposit amount a bit bigger, so liquidity coverage is assured
 
-        require(mintAmount <= _tokenAmount, "Amounts calculation error");
-        uint256 depositAmount = _tokenAmount - uint168(mintAmount);
+        {
+            uint256 numeratorPlus = cviValue * _tokenAmount * (MAX_PERCENTAGE - depositFee);
+            uint256 numeratorMinus = uint256(leverage) * currentGain * MAX_PERCENTAGE * (maxCVIValue - cviValue);
+            uint256 denominatorPlus = uint256(leverage) * MAX_PERCENTAGE * (maxCVIValue - cviValue) + cviValue * (MAX_PERCENTAGE - depositFee);
+            uint256 denominatorMinus = uint256(leverage) * leverage * openFee * (maxCVIValue - cviValue);
 
-        require(depositAmount * (MAX_PERCENTAGE - depositFee) / MAX_PERCENTAGE >=
-            mintAmount * (MAX_PERCENTAGE - openFee) / MAX_PERCENTAGE * (maxCVIValue - cviValue) / cviValue, "Amounts calculation error");
+            uint256 numerator = numeratorPlus > numeratorMinus ? numeratorPlus - numeratorMinus : numeratorMinus - numeratorPlus;
+            uint256 denominator = denominatorPlus > denominatorMinus ? denominatorPlus - denominatorMinus : denominatorMinus - denominatorPlus;
 
-        if (depositAmount > 0) {
-            shortTokensMinted = deposit(depositAmount);
+            mintAmount = uint168(numerator / denominator) - 1;
+        }
+
+        if (mintAmount > _tokenAmount) {
+            return (0, 0, false);
+        }
+
+        depositAmount = _tokenAmount - mintAmount;
+
+        if (depositAmount * (MAX_PERCENTAGE - depositFee) / MAX_PERCENTAGE <
+                (currentGain + mintAmount - mintAmount * leverage * openFee / MAX_PERCENTAGE) * leverage * (maxCVIValue - cviValue) / cviValue) {
+            return (0, 0, false);
+        }
+
+        return (mintAmount, depositAmount, true);
+    }
+
+    function mintCollateralizedTokens(uint168 _mintAmount, uint168 _depositAmount) private returns (uint256 tokensMinted, uint256 shortTokensMinted) {
+        if (_depositAmount > 0) {
+            shortTokensMinted = platform.deposit(_depositAmount, 0);
             IERC20Upgradeable(address(platform)).safeTransfer(msg.sender, shortTokensMinted);
         }
 
-        tokensMinted = mintTokens(uint168(mintAmount), true, 0);
+        tokensMinted = mintTokens(uint168(_mintAmount), true, 0);
 
-        emit CollateralizedMint(msg.sender, _tokenAmount, tokensMinted, shortTokensMinted);
+        emit CollateralizedMint(msg.sender, _mintAmount + _depositAmount, tokensMinted, shortTokensMinted);
+    }
+
+    function _liquidateRequest(uint256 _requestId, Request memory _request) private returns (uint256 findersFeeAmount) {
+        uint168 updatedTokenAmount = getUpdatedTokenAmount(_request.requestType, _request.tokenAmount);
+        uint168 timeDelayFeeAmount = updatedTokenAmount * _request.timeDelayRequestFeesPercent / MAX_PERCENTAGE;
+        uint168 maxFeesAmount = updatedTokenAmount * _request.maxRequestFeesPercent / MAX_PERCENTAGE;
+        uint256 leftAmount = timeDelayFeeAmount + maxFeesAmount;
+
+        if (_request.requestType == BURN_REQUEST_TYPE) {
+            leftAmount = _burnTokens(leftAmount);
+        } else {
+            subtractTotalRequestAmount(updatedTokenAmount);
+        }
+
+        findersFeeAmount = requestFeesCalculator.calculateFindersFee(leftAmount);
+
+        delete requests[_requestId];
+
+        feesCollector.sendProfit(leftAmount - findersFeeAmount, IERC20(address(token)));
+        token.safeTransfer(msg.sender, findersFeeAmount);
+
+        emit LiquidateRequest(_requestId, _request.requestType, _request.owner, msg.sender, findersFeeAmount);
+    }
+
+    function subtractTotalRequestAmount(uint256 _amount) private {
+        if (_amount > totalRequestsAmount) {
+            totalRequestsAmount = 0;
+        } else {
+            totalRequestsAmount = totalRequestsAmount - _amount;
+        }
     }
 
     function collectRelevantTokens(uint8 _requestType, uint256 _tokenAmount) private {
@@ -334,29 +460,23 @@ contract VolatilityToken is Initializable, IVolatilityToken, ReentrancyGuardUpgr
             require(balanceOf(msg.sender) >= _tokenAmount, "Not enough tokens");
             IERC20Upgradeable(address(this)).safeTransferFrom(msg.sender, address(this), _tokenAmount);
         } else {
-            collectTokens(_tokenAmount);
+            token.safeTransferFrom(msg.sender, address(this), _tokenAmount);
         }
     }
 
-    function transferFunds(uint256 _tokenAmount) internal virtual {
-        token.safeTransfer(msg.sender, _tokenAmount);
-    }
-
-    function collectTokens(uint256 _tokenAmount) internal virtual {
-        token.safeTransferFrom(msg.sender, address(this), _tokenAmount);
-    }
-
-    function sendProfit(uint256 _amount, IERC20Upgradeable _token) internal virtual {
-        feesCollector.sendProfit(_amount, IERC20(address(_token)));
-    }
-
-    function openPosition(uint168 _amount, bool _withPremiumFee, uint16 _maxBuyingPremiumFeePercentage) internal virtual returns (uint168 positionUnitsAmount, uint168 positionedTokenAmount) {
+    function openPosition(uint168 _amount, bool _withPremiumFee, uint16 _maxBuyingPremiumFeePercentage) private returns (uint168 positionUnitsAmount, uint168 positionedTokenAmount) {
         return _withPremiumFee ? 
-            platform.openPosition(_amount, platform.maxCVIValue(), _maxBuyingPremiumFeePercentage, leverage) :
+            platform.openPositionWithoutVolumeFee(_amount, platform.maxCVIValue(), _maxBuyingPremiumFeePercentage, leverage) :
             platform.openPositionWithoutPremiumFee(_amount, platform.maxCVIValue(), leverage);
     }
 
-    function deposit(uint256 _amount) internal virtual returns (uint256 shortTokensMinted) {
-        return platform.deposit(_amount, 0);
+    function getUpdatedTokenAmount(uint8 _requestType, uint168 _requestAmount) private view returns (uint168 updatedTokenAmount) {
+        if (_requestType != BURN_REQUEST_TYPE) {
+            return _requestAmount;
+        }
+
+        uint256 __updatedTokenAmount = underlyingToValue(_requestAmount);
+        require(uint168(__updatedTokenAmount) == __updatedTokenAmount);
+        updatedTokenAmount = uint168(__updatedTokenAmount);
     }
 }

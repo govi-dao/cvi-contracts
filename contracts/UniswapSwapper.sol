@@ -47,7 +47,7 @@ contract UniswapSwapper is IUniswapSwapper, ISwapper, Ownable {
         path[1] = address(wethToken);
 
         uint[] memory _tokenAmountsOut = uniswapRouter.getAmountsOut(_tokenAmount, path);
-        uint _tokenAmountWeth = _tokenAmountsOut[0];
+        uint _tokenAmountWeth = _tokenAmountsOut[1];
         
         uint256 _tokenAmountToSwap = _tokenAmount;
 

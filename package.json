@@ -1,48 +1,43 @@
 {
   "name": "cvi-contracts",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "CVI (Crypto volatility index) Smart contracts",
-  "main": "truffle-config.js",
   "directories": {
     "test": "test"
   },
   "scripts": {
-    "test": "npx mocha --exit --recursive --timeout 20000",
-    "solhint": "./node_modules/.bin/solhint -f table contracts/**/*.sol",
-    "prettier:solidity": "./node_modules/.bin/prettier --write contracts/**/*.sol"
+    "test": "npx hardhat test"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/coti-io/cvi-contracts"
   },
-  "keywords": [
-    "coti",
-    "cvi",
-    "smart contracts"
-  ],
-  "author": "Yoni Neeman",
-  "license": "GPL-3.0",
+  "author": "",
+  "license": "BUSL",
   "bugs": {
     "url": "https://github.com/coti-io/cvi-contracts/issues"
   },
   "homepage": "https://github.com/coti-io/cvi-contracts#readme",
   "devDependencies": {
-    "@babel/polyfill": "^7.12.1",
-    "eslint": "^6.2.2",
-    "eslint-plugin-truffle": "^0.3.1",
-    "prettier": "^2.1.1",
-    "prettier-plugin-solidity": "^1.0.0-alpha.57",
-    "solhint": "^3.2.0",
-    "solhint-plugin-prettier": "0.0.5"
-  },
-  "dependencies": {
-    "@openzeppelin/contracts": "^3.2.0",
-    "@openzeppelin/test-environment": "^0.1.6",
-    "@openzeppelin/test-helpers": "^0.5.6",
-    "@truffle/hdwallet-provider": "^1.2.1",
-    "@umaprotocol/truffle-ledger-provider": "^1.0.3",
-    "@uniswap/v2-periphery": "^1.1.0-beta.0",
-    "install": "^0.13.0",
-    "solc": "^0.6.12"
+    "@chainlink/contracts": "^0.2.2",
+    "@ethersproject/hardware-wallets": "^5.5.0",
+    "@nomiclabs/hardhat-ethers": "^2.0.2",
+    "@nomiclabs/hardhat-etherscan": "^2.1.7",
+    "@nomiclabs/hardhat-truffle5": "^2.0.2",
+    "@nomiclabs/hardhat-waffle": "^2.0.1",
+    "@nomiclabs/hardhat-web3": "^2.0.0",
+    "@openzeppelin/contracts": "^4.3.2",
+    "@openzeppelin/contracts-upgradeable": "^4.3.2",
+    "@openzeppelin/hardhat-upgrades": "^1.10.0",
+    "@openzeppelin/test-helpers": "^0.5.15",
+    "chai": "^4.3.4",
+    "dotenv": "^10.0.0",
+    "ethereum-waffle": "^3.4.0",
+    "ethers": "^5.5.1",
+    "hardhat": "^2.6.6",
+    "hardhat-contract-sizer": "^2.1.1",
+    "ts-node": "^10.4.0",
+    "typescript": "^4.4.4",
+    "web3": "^1.6.0"
   }
 }

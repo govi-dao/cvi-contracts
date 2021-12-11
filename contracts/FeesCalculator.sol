@@ -22,22 +22,40 @@ contract FeesCalculator is IFeesCalculator, Ownable {
 
     uint16 private constant MAX_PERCENTAGE = 10000;
 
+    uint16 private constant COLATERAL_VALUES_NUM = 101; // From 0.00 to 1.00 inclusive
+
     uint16 public maxCVIValue;
 
     uint16 public override depositFeePercent = 0;
     uint16 public override withdrawFeePercent = 0;
     uint16 public override openPositionFeePercent = 15;
     uint16 public override openPositionLPFeePercent = 15;
-    uint16 public override buyingPremiumFeeMaxPercent = 1000;
+    uint16 public override closePositionLPFeePercent = 0;
+    uint16 public buyingPremiumFeeMaxPercent = 1000;
+    uint16 public closingPremiumFeeMaxPercent = 1000;
     uint16 public override closePositionFeePercent = 30;
 
-    uint16 public buyingPremiumThreshold = 8000; // 1.0 is MAX_PERCENTAGE = 10000
+    uint16 public buyingPremiumThreshold = 6500; // 1.0 is MAX_PERCENTAGE = 10000
 
     uint16 public closePositionMaxFeePercent = 300;
 
     uint16 public maxTurbulenceFeePercentToTrim = 100;
     uint16 public turbulenceStepPercent = 1000;
     uint16 public override turbulenceIndicatorPercent = 0;
+
+    uint32 public adjustedVolumeTimestamp;
+    uint16 public volumeTimeWindow = 2 hours;
+    uint16 public volumeFeeTimeWindow = 1 hours;
+    uint16 public maxVolumeFeeDeltaCollateral = 400; // 100% is MAX_PERCENTAGE = 10000
+    uint16 public midVolumeFee = 0; // 100% is MAX_PERCENTAGE = 10000
+    uint16 public maxVolumeFee = 130; // 100% is MAX_PERCENTAGE = 10000
+
+    uint32 public closeAdjustedVolumeTimestamp;
+    uint16 public closeVolumeTimeWindow = 2 hours;
+    uint16 public closeVolumeFeeTimeWindow = 1 hours;
+    uint16 public closeMaxVolumeFeeDeltaCollateral = 400; // 100% is MAX_PERCENTAGE = 10000
+    uint16 public closeMidVolumeFee = 0; // 100% is MAX_PERCENTAGE = 10000
+    uint16 public closeMaxVolumeFee = 80; // 100% is MAX_PERCENTAGE = 10000
 
     uint256 public oracleHeartbeatPeriod = 55 minutes;
     uint256 public closePositionFeeDecayPeriod = 24 hours;
@@ -46,11 +64,13 @@ contract FeesCalculator is IFeesCalculator, Ownable {
     uint16 public turbulenceDeviationThresholdPercent = 7000; // 1.0 is MAX_PERCENTAGE = 10000
     uint16 public turbulenceDeviationPercentage = 500; // 1.0 is MAX_PERCENTAGE = 10000
 
-    ICVIOracle public cviOracle;
-    address public turbulenceUpdator;
+    uint16[] public collateralToBuyingPremiumMapping = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 6, 8, 9, 11, 14, 16, 20, 24, 29, 35, 42, 52, 63, 77, 94, 115, 140, 172, 212, 261, 323, 399, 495, 615, 765, 953, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000];
 
-    modifier onlyTurbulenceUpdator {
-        require(msg.sender == turbulenceUpdator, "Not allowed");
+    ICVIOracle public cviOracle;
+    address public stateUpdator;
+
+    modifier onlyStateUpdator {
+        require(msg.sender == stateUpdator, "Not allowed");
         _;
     }
 
@@ -59,21 +79,30 @@ contract FeesCalculator is IFeesCalculator, Ownable {
         cviOracle = _cviOracle;
     }
 
-    function updateTurbulenceIndicatorPercent(uint256 _totalTime, uint256 _newRounds, uint16 _lastCVIValue, uint16 _currCVIValue) external override onlyTurbulenceUpdator returns (uint16 updatedTurbulenceIndicatorPercent) {
-        uint256 totalHeartbeats = _totalTime / oracleHeartbeatPeriod;
-        updatedTurbulenceIndicatorPercent = calculateTurbulenceIndicatorPercent(totalHeartbeats, _newRounds, _lastCVIValue, _currCVIValue);
+    function updateTurbulenceIndicatorPercent(uint256 _totalTime, uint256 _newRounds, uint16 _lastCVIValue, uint16 _currCVIValue) external override onlyStateUpdator {
+        uint16 updatedTurbulenceIndicatorPercent = calculateTurbulenceIndicatorPercent(_totalTime, _newRounds, _lastCVIValue, _currCVIValue);
 
         if (updatedTurbulenceIndicatorPercent != turbulenceIndicatorPercent) {
             turbulenceIndicatorPercent = updatedTurbulenceIndicatorPercent;
         }
     }
 
+    function updateAdjustedTimestamp(uint256 _collateralRatio, uint256 _lastCollateralRatio) external override onlyStateUpdator {
+        uint256 deltaCollateral = _collateralRatio - _lastCollateralRatio; // Note: must be greater than 0
+        adjustedVolumeTimestamp = getAdjustedTimestamp(adjustedVolumeTimestamp, deltaCollateral, volumeTimeWindow, maxVolumeFeeDeltaCollateral);
+    }
+
+    function updateCloseAdjustedTimestamp(uint256 _collateralRatio, uint256 _lastCollateralRatio) external override onlyStateUpdator {
+        uint256 deltaCollateral = _lastCollateralRatio - _collateralRatio; // Note: must be greater than 0
+        closeAdjustedVolumeTimestamp = getAdjustedTimestamp(closeAdjustedVolumeTimestamp, deltaCollateral, closeVolumeTimeWindow, closeMaxVolumeFeeDeltaCollateral);
+    }
+
     function setOracle(ICVIOracle _cviOracle) external override onlyOwner {
         cviOracle = _cviOracle;
     }
 
-    function setTurbulenceUpdator(address _newUpdator) external override onlyOwner {
-        turbulenceUpdator = _newUpdator;
+    function setStateUpdator(address _newUpdator) external override onlyOwner {
+        stateUpdator = _newUpdator;
     }
 
     function setDepositFee(uint16 _newDepositFeePercentage) external override onlyOwner {
@@ -102,6 +131,11 @@ contract FeesCalculator is IFeesCalculator, Ownable {
         openPositionLPFeePercent = _newOpenPositionLPFeePercent;
     }
 
+    function setClosePositionLPFee(uint16 _newClosePositionLPFeePercent) external override onlyOwner {
+        require(_newClosePositionLPFeePercent < MAX_PERCENTAGE, "Fee exceeds maximum");
+        closePositionLPFeePercent = _newClosePositionLPFeePercent;
+    }
+
     function setClosePositionMaxFee(uint16 _newClosePositionMaxFeePercentage) external override onlyOwner {
         require(_newClosePositionMaxFeePercentage < MAX_PERCENTAGE, "Fee exceeds maximum");
         require(_newClosePositionMaxFeePercentage >= closePositionFeePercent, "Max fee below min fee");
@@ -126,6 +160,16 @@ contract FeesCalculator is IFeesCalculator, Ownable {
     function setBuyingPremiumThreshold(uint16 _newBuyingPremiumThreshold) external override onlyOwner {
         require(_newBuyingPremiumThreshold < MAX_PERCENTAGE, "Threshold exceeds maximum");
         buyingPremiumThreshold = _newBuyingPremiumThreshold;   
+    }
+
+    function setClosingPremiumFeeMax(uint16 _newClosingPremiumFeeMaxPercentage) external override onlyOwner {
+        require(_newClosingPremiumFeeMaxPercentage < MAX_PERCENTAGE, "Fee exceeds maximum");
+        closingPremiumFeeMaxPercent = _newClosingPremiumFeeMaxPercentage;
+    }
+
+    function setCollateralToBuyingPremiumMapping(uint16[] calldata _newCollateralToBuyingPremiumMapping) external override onlyOwner {
+        require(_newCollateralToBuyingPremiumMapping.length == COLATERAL_VALUES_NUM, "Bad mapping size");
+        collateralToBuyingPremiumMapping = _newCollateralToBuyingPremiumMapping;
     }
 
     function setFundingFeeConstantRate(uint16 _newfundingFeeConstantRate) external override onlyOwner {
@@ -153,7 +197,47 @@ contract FeesCalculator is IFeesCalculator, Ownable {
         turbulenceDeviationPercentage = _newTurbulenceDeviationPercentage;
     }
 
-    function calculateTurbulenceIndicatorPercent(uint256 totalHeartbeats, uint256 newRounds, uint16 _lastCVIValue, uint16 _currCVIValue) public view override returns (uint16) {
+    function setVolumeTimeWindow(uint16 _newVolumeTimeWindow) external override onlyOwner {
+        volumeTimeWindow = _newVolumeTimeWindow;
+    }
+
+    function setVolumeFeeTimeWindow(uint16 _newVolumeFeeTimeWindow) external override onlyOwner {
+        volumeFeeTimeWindow = _newVolumeFeeTimeWindow;
+    }
+
+    function setMaxVolumeFeeDeltaCollateral(uint16 _newMaxVolumeFeeDeltaCollateral) external override onlyOwner {
+        maxVolumeFeeDeltaCollateral = _newMaxVolumeFeeDeltaCollateral;
+    }
+
+    function setMidVolumeFee(uint16 _newMidVolumeFee) external override onlyOwner {
+        midVolumeFee = _newMidVolumeFee;
+    }
+
+    function setMaxVolumeFee(uint16 _newMaxVolumeFee) external override onlyOwner {
+        maxVolumeFee = _newMaxVolumeFee;
+    }
+
+    function setCloseVolumeTimeWindow(uint16 _newCloseVolumeTimeWindow) external override onlyOwner {
+        closeVolumeTimeWindow = _newCloseVolumeTimeWindow;
+    }
+
+    function setCloseVolumeFeeTimeWindow(uint16 _newCloseVolumeFeeTimeWindow) external override onlyOwner {
+        closeVolumeFeeTimeWindow = _newCloseVolumeFeeTimeWindow;
+    }
+
+    function setCloseMaxVolumeFeeDeltaCollateral(uint16 _newCloseMaxVolumeFeeDeltaCollateral) external override onlyOwner {
+        closeMaxVolumeFeeDeltaCollateral = _newCloseMaxVolumeFeeDeltaCollateral;
+    }
+
+    function setCloseMidVolumeFee(uint16 _newCloseMidVolumeFee) external override onlyOwner {
+        closeMidVolumeFee = _newCloseMidVolumeFee;
+    }
+
+    function setCloseMaxVolumeFee(uint16 _newCloseMaxVolumeFee) external override onlyOwner {
+        closeMaxVolumeFee = _newCloseMaxVolumeFee;
+    }
+
+    function calculateTurbulenceIndicatorPercent(uint256 totalTime, uint256 newRounds, uint16 _lastCVIValue, uint16 _currCVIValue) public view override returns (uint16) {
         uint16 updatedTurbulenceIndicatorPercent = turbulenceIndicatorPercent;
 
         uint256 CVIDeltaPercent = uint256(_currCVIValue > _lastCVIValue ? (_currCVIValue - _lastCVIValue) : (_lastCVIValue - _currCVIValue)) * MAX_PERCENTAGE / _lastCVIValue;
@@ -161,6 +245,7 @@ contract FeesCalculator is IFeesCalculator, Ownable {
 
         uint256 decayTimes = 0;
         uint256 turbulenceTimes = 0;
+        uint256 totalHeartbeats = totalTime / oracleHeartbeatPeriod;
         if (newRounds > totalHeartbeats) {
             turbulenceTimes = newRounds - totalHeartbeats;
             turbulenceTimes = turbulenceTimes >  maxAllowedTurbulenceTimes ? maxAllowedTurbulenceTimes : turbulenceTimes;
@@ -188,12 +273,22 @@ contract FeesCalculator is IFeesCalculator, Ownable {
         return updatedTurbulenceIndicatorPercent;
     }
 
-    function calculateBuyingPremiumFee(uint168 _tokenAmount, uint8 _leverage, uint256 _collateralRatio, uint256 _lastCollateralRatio) external view override returns (uint168 buyingPremiumFee, uint16 combinedPremiumFeePercentage) {
-        (buyingPremiumFee, combinedPremiumFeePercentage) =  _calculateBuyingPremiumFeeWithTurbulence(_tokenAmount, _leverage, _collateralRatio, _lastCollateralRatio, turbulenceIndicatorPercent);
+    function calculateBuyingPremiumFee(uint168 _tokenAmount, uint8 _leverage, uint256 _collateralRatio, uint256 _lastCollateralRatio, bool _withVolumeFee) external view override returns (uint168 buyingPremiumFee, uint16 combinedPremiumFeePercentage) {
+        (buyingPremiumFee, combinedPremiumFeePercentage) =  _calculateBuyingPremiumFeeWithParameters(_tokenAmount, _leverage, _collateralRatio, _lastCollateralRatio, _withVolumeFee, turbulenceIndicatorPercent, adjustedVolumeTimestamp);
     }
     
-    function calculateBuyingPremiumFeeWithTurbulence(uint168 _tokenAmount, uint8 _leverage, uint256 _collateralRatio, uint256 _lastCollateralRatio, uint16 _turbulenceIndicatorPercent) external view override returns (uint168 buyingPremiumFee, uint16 combinedPremiumFeePercentage) {
-        (buyingPremiumFee, combinedPremiumFeePercentage) = _calculateBuyingPremiumFeeWithTurbulence(_tokenAmount, _leverage, _collateralRatio, _lastCollateralRatio, _turbulenceIndicatorPercent);
+    function calculateBuyingPremiumFeeWithAddendum(uint168 _tokenAmount, uint8 _leverage, uint256 _collateralRatio, uint256 _lastCollateralRatio, bool _withVolumeFee, uint16 _turbulenceIndicatorPercent) external view override returns (uint168 buyingPremiumFee, uint16 combinedPremiumFeePercentage) {
+        (buyingPremiumFee, combinedPremiumFeePercentage) = _calculateBuyingPremiumFeeWithParameters(_tokenAmount, _leverage, _collateralRatio, _lastCollateralRatio, _withVolumeFee, 
+            _turbulenceIndicatorPercent, getAdjustedTimestamp(adjustedVolumeTimestamp, _collateralRatio - _lastCollateralRatio, volumeTimeWindow, maxVolumeFeeDeltaCollateral));
+    }
+
+    function calculateClosingPremiumFee(uint256 /*_tokenAmount*/, uint256 /*_collateralRatio*/, uint256 /*_lastCollateralRatio*/, bool _withVolumeFee) external view override returns (uint16 combinedPremiumFeePercentage) {
+        return _calculateClosingPremiumFee(_withVolumeFee, closeAdjustedVolumeTimestamp);
+    }
+
+    function calculateClosingPremiumFeeWithAddendum(uint256 _collateralRatio, uint256 _lastCollateralRatio, bool _withVolumeFee) external view override returns (uint16 combinedPremiumFeePercentage) {
+        return _calculateClosingPremiumFee(_withVolumeFee,
+            getAdjustedTimestamp(closeAdjustedVolumeTimestamp, _lastCollateralRatio - _collateralRatio, closeVolumeTimeWindow, closeMaxVolumeFeeDeltaCollateral));
     }
 
     function calculateSingleUnitFundingFee(CVIValue[] memory _cviValues) public override view returns (uint256 fundingFee) {
@@ -202,40 +297,7 @@ contract FeesCalculator is IFeesCalculator, Ownable {
         }
     }
 
-    function calculateSingleUnitPeriodFundingFee(CVIValue memory _cviValue) private view returns (uint256 fundingFee) {
-        if (_cviValue.cviValue == 0 || _cviValue.period == 0) {
-            return 0;
-        }
-
-        uint256 fundingFeeRatePercents = FUNDING_FEE_MAX_RATE;
-        uint16 integerCVIValue = _cviValue.cviValue / CVI_DECIMALS;
-        if (integerCVIValue > MAX_FUNDING_FEE_CVI_THRESHOLD) {
-            if (integerCVIValue >= MIN_FUDNING_FEE_CVI_THRESHOLD) {
-                fundingFeeRatePercents = FUNDING_FEE_MIN_RATE;
-            } else {
-                // Defining as memory to keep function pure and save storage space + reads
-                uint24[5] memory fundingFeeCoefficients = [100000, 114869, 131950, 151571, 174110];
-
-                uint256 exponent = (integerCVIValue - MAX_FUNDING_FEE_CVI_THRESHOLD) / FUNDING_FEE_DIVISION_FACTOR;
-                uint256 coefficientIndex = (integerCVIValue - MAX_FUNDING_FEE_CVI_THRESHOLD) % FUNDING_FEE_DIVISION_FACTOR;
-
-                // Note: overflow is not possible as the exponent can only get larger, and other parts are constants
-                // However, 2 ** exponent can overflow if cvi value is wrong
-
-                require(exponent < 256, "exponent overflow");
-                fundingFeeRatePercents = PRECISION_DECIMALS / (2 ** exponent) / fundingFeeCoefficients[coefficientIndex] + fundingFeeConstantRate;
-
-                if (fundingFeeRatePercents > FUNDING_FEE_MAX_RATE) {
-                    fundingFeeRatePercents = FUNDING_FEE_MAX_RATE;
-                }
-            }
-        }
-
-        return PRECISION_DECIMALS * _cviValue.cviValue * fundingFeeRatePercents * _cviValue.period /
-            FUNDING_FEE_BASE_PERIOD / maxCVIValue / MAX_FUNDING_FEE_PERCENTAGE;
-    }
-
-    function updateSnapshots(uint256 _latestTimestamp, uint256 _blockTimestampSnapshot, uint256 _latestTimestampSnapshot, uint80 latestOracleRoundId) external override  view returns (SnapshotUpdate memory snapshotUpdate) {
+    function updateSnapshots(uint256 _latestTimestamp, uint256 _blockTimestampSnapshot, uint256 _latestTimestampSnapshot, uint80 latestOracleRoundId) external override view returns (SnapshotUpdate memory snapshotUpdate) {
         (uint16 cviValue, uint80 periodEndRoundId, uint256 periodEndTimestamp) = cviOracle.getCVILatestRoundData();
         snapshotUpdate.cviValue = cviValue;
         snapshotUpdate.cviValueTimestamp = periodEndTimestamp;
@@ -303,7 +365,40 @@ contract FeesCalculator is IFeesCalculator, Ownable {
         buyingPremiumFeeMaxPercentResult = buyingPremiumFeeMaxPercent;
     }
 
-    function _calculateBuyingPremiumFeeWithTurbulence(uint168 _tokenAmount, uint8 _leverage, uint256 _collateralRatio, uint256 _lastCollateralRatio, uint16 _turbulenceIndicatorPercent) private view returns (uint168 buyingPremiumFee, uint16 combinedPremiumFeePercentage) {
+    function calculateSingleUnitPeriodFundingFee(CVIValue memory _cviValue) private view returns (uint256 fundingFee) {
+        if (_cviValue.cviValue == 0 || _cviValue.period == 0) {
+            return 0;
+        }
+
+        uint256 fundingFeeRatePercents = FUNDING_FEE_MAX_RATE;
+        uint16 integerCVIValue = _cviValue.cviValue / CVI_DECIMALS;
+        if (integerCVIValue > MAX_FUNDING_FEE_CVI_THRESHOLD) {
+            if (integerCVIValue >= MIN_FUDNING_FEE_CVI_THRESHOLD) {
+                fundingFeeRatePercents = FUNDING_FEE_MIN_RATE;
+            } else {
+                // Defining as memory to keep function pure and save storage space + reads
+                uint24[5] memory fundingFeeCoefficients = [100000, 114869, 131950, 151571, 174110];
+
+                uint256 exponent = (integerCVIValue - MAX_FUNDING_FEE_CVI_THRESHOLD) / FUNDING_FEE_DIVISION_FACTOR;
+                uint256 coefficientIndex = (integerCVIValue - MAX_FUNDING_FEE_CVI_THRESHOLD) % FUNDING_FEE_DIVISION_FACTOR;
+
+                // Note: overflow is not possible as the exponent can only get larger, and other parts are constants
+                // However, 2 ** exponent can overflow if cvi value is wrong
+
+                require(exponent < 256, "exponent overflow");
+                fundingFeeRatePercents = PRECISION_DECIMALS / (2 ** exponent) / fundingFeeCoefficients[coefficientIndex] + fundingFeeConstantRate;
+
+                if (fundingFeeRatePercents > FUNDING_FEE_MAX_RATE) {
+                    fundingFeeRatePercents = FUNDING_FEE_MAX_RATE;
+                }
+            }
+        }
+
+        return PRECISION_DECIMALS * _cviValue.cviValue * fundingFeeRatePercents * _cviValue.period /
+            FUNDING_FEE_BASE_PERIOD / maxCVIValue / MAX_FUNDING_FEE_PERCENTAGE;
+    }
+
+    function _calculateBuyingPremiumFeeWithParameters(uint168 _tokenAmount, uint8 _leverage, uint256 _collateralRatio, uint256 _lastCollateralRatio, bool _withVolumeFee, uint16 _turbulenceIndicatorPercent, uint32 _adjustedVolumeTimestamp) private view returns (uint168 buyingPremiumFee, uint16 combinedPremiumFeePercentage) {
         require(_collateralRatio >= _lastCollateralRatio);
 
         uint16 buyingPremiumFeePercentage = 0;
@@ -311,30 +406,60 @@ contract FeesCalculator is IFeesCalculator, Ownable {
             buyingPremiumFeePercentage = calculateRelativePercentage(buyingPremiumFeeMaxPercent, _collateralRatio, _lastCollateralRatio);
         } else {
             if (_collateralRatio >= buyingPremiumThreshold * PRECISION_DECIMALS / MAX_PERCENTAGE) {
-                // NOTE: The collateral ratio can never be bigger than 1.0 (= PERCISION_DECIMALS) in calls from the platform,
-                // so there is no issue with having a revert always occuring on (PRECISION_DECIMALS - _collateralRatio) on specific scenarios
-
-                // Denominator is multiplied by PRECISION_DECIMALS, but is squared, so need to have a square in numerator as well
-                // TOOD: Use safecast?
-                buyingPremiumFeePercentage = calculateRelativePercentage(uint16(PRECISION_DECIMALS ** 2 / (PRECISION_DECIMALS - _collateralRatio) ** 2), _collateralRatio, _lastCollateralRatio);
+                buyingPremiumFeePercentage = calculateRelativePercentage(collateralToBuyingPremiumMapping[_collateralRatio * 10**2 / PRECISION_DECIMALS], _collateralRatio, _lastCollateralRatio);
             }
         }
 
-        combinedPremiumFeePercentage = buyingPremiumFeePercentage == 0 ? openPositionLPFeePercent + _turbulenceIndicatorPercent : buyingPremiumFeePercentage + _turbulenceIndicatorPercent;
+        uint16 volumeFeePercentage = calculateVolumeFee(_withVolumeFee, _adjustedVolumeTimestamp, volumeTimeWindow, volumeFeeTimeWindow, midVolumeFee, maxVolumeFee);
+
+        combinedPremiumFeePercentage = openPositionLPFeePercent + _turbulenceIndicatorPercent + buyingPremiumFeePercentage + volumeFeePercentage;
         if (combinedPremiumFeePercentage > buyingPremiumFeeMaxPercent) {
             combinedPremiumFeePercentage = buyingPremiumFeeMaxPercent;
         }
-        
+
         uint256 __buyingPremiumFee = uint256(_tokenAmount) * _leverage * combinedPremiumFeePercentage / MAX_PERCENTAGE;
         buyingPremiumFee = uint168(__buyingPremiumFee);
         require(__buyingPremiumFee == buyingPremiumFee, "Too much tokens");
     }
 
+    function _calculateClosingPremiumFee(bool _withVolumeFee, uint32 _adjustedCloseVolumeTimestamp) private view returns (uint16 combinedPremiumFeePercentage) {
+        uint16 closingPremiumFeePercentage = calculateVolumeFee(_withVolumeFee, _adjustedCloseVolumeTimestamp, closeVolumeTimeWindow, closeVolumeFeeTimeWindow, closeMidVolumeFee, closeMaxVolumeFee);
+
+        combinedPremiumFeePercentage = closePositionLPFeePercent + closingPremiumFeePercentage;
+        if (combinedPremiumFeePercentage > closingPremiumFeeMaxPercent) {
+            combinedPremiumFeePercentage = closingPremiumFeeMaxPercent;
+        }
+    }
+
+    function calculateVolumeFee(bool _withVolumeFee, uint32 _adjustedVolumeTimestamp, uint16 _volumeTimeWindow, uint16 _volumeFeeTimeWindow, uint16 _midVolumeFee, uint16 _maxVolumeFee) private view returns (uint16 volumeFeePercentage) {
+        if (_withVolumeFee) {
+            if (_adjustedVolumeTimestamp < block.timestamp - _volumeFeeTimeWindow) {
+                volumeFeePercentage = uint16(uint256(_midVolumeFee) * (_adjustedVolumeTimestamp - (block.timestamp - _volumeTimeWindow)) / (_volumeTimeWindow - _volumeFeeTimeWindow));
+            } else {
+                volumeFeePercentage = uint16(uint256(_midVolumeFee) + (_maxVolumeFee - _midVolumeFee) * (_adjustedVolumeTimestamp - (block.timestamp - _volumeFeeTimeWindow)) / _volumeFeeTimeWindow);
+            }
+        }
+    }
+
     function calculateRelativePercentage(uint16 _percentage, uint256 _collateralRatio, uint256 _lastCollateralRatio) private view returns (uint16) {
-        if (_lastCollateralRatio >= buyingPremiumThreshold * PRECISION_DECIMALS / MAX_PERCENTAGE) {
+        if (_lastCollateralRatio >= buyingPremiumThreshold * PRECISION_DECIMALS / MAX_PERCENTAGE || _collateralRatio == _lastCollateralRatio) {
             return _percentage;
         }
 
         return uint16(_percentage * (_collateralRatio - buyingPremiumThreshold * PRECISION_DECIMALS / MAX_PERCENTAGE) / (_collateralRatio - _lastCollateralRatio));
+    }
+
+    function getAdjustedTimestamp(uint32 _currAdjustedTimetamp, uint256 _deltaCollateral, uint16 _volumeTimeWindow, uint16 _maxVolumeFeeDeltaCollateral) private view returns (uint32 newAdjustedTimestamp) {
+        newAdjustedTimestamp = _currAdjustedTimetamp;
+
+        if (newAdjustedTimestamp < block.timestamp - _volumeTimeWindow) {
+            newAdjustedTimestamp = uint32(block.timestamp) - _volumeTimeWindow;
+        }
+
+        newAdjustedTimestamp = uint32(newAdjustedTimestamp + uint256(_volumeTimeWindow) * _deltaCollateral / (_maxVolumeFeeDeltaCollateral * PRECISION_DECIMALS / MAX_PERCENTAGE));
+
+        if (newAdjustedTimestamp > block.timestamp) {
+            newAdjustedTimestamp = uint32(block.timestamp);
+        }
     }
 }

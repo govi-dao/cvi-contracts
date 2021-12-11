@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity ^0.8;
 
-
 import "./interfaces/IETHPlatform.sol";
 import "./Platform.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
 contract ETHPlatform is Platform, IETHPlatform {
 
@@ -15,23 +13,29 @@ contract ETHPlatform is Platform, IETHPlatform {
             Platform.initialize(IERC20Upgradeable(address(0)), _lpTokenName, _lpTokenSymbolName, _initialTokenToLPTokenRate, _maxCVIValue, _feesCalculator, _cviOracle, _liquidation);
     }
 
-    function depositETH(uint256 _minLPTokenAmount) external override payable nonReentrant returns (uint256 lpTokenAmount) {
+    function depositETH(uint256 _minLPTokenAmount) external override payable returns (uint256 lpTokenAmount) {
         lpTokenAmount = _deposit(msg.value, _minLPTokenAmount);
     }
 
-    function increaseSharedPoolETH() external override payable nonReentrant {
+    function increaseSharedPoolETH() external override payable {
         _increaseSharedPool(msg.value);
     }
 
-    function openPositionETH(uint16 _maxCVI, uint16 _maxBuyingPremiumFeePercentage, uint8 _leverage) external override payable nonReentrant returns (uint168 positionUnitsAmount, uint168 positionedETHAmount) {
+    function openPositionETH(uint16 _maxCVI, uint16 _maxBuyingPremiumFeePercentage, uint8 _leverage) external override payable returns (uint168 positionUnitsAmount, uint168 positionedETHAmount) {
         require(uint168(msg.value) == msg.value, "Too much ETH");
-        return _openPosition(uint168(msg.value), _maxCVI, _maxBuyingPremiumFeePercentage, _leverage, true);
+        return _openPosition(uint168(msg.value), _maxCVI, _maxBuyingPremiumFeePercentage, _leverage, true, true);
+    }
+
+    function openPositionWithoutVolumeFeeETH(uint16 _maxCVI, uint16 _maxBuyingPremiumFeePercentage, uint8 _leverage) external override payable returns (uint168 positionUnitsAmount, uint168 positionedTokenAmount) {
+        require(uint168(msg.value) == msg.value, "Too much ETH");
+        require(noPremiumFeeAllowedAddresses[msg.sender]); // "Not allowed"
+        return _openPosition(uint168(msg.value), _maxCVI, _maxBuyingPremiumFeePercentage, _leverage, true, false);   
     }
 
     function openPositionWithoutPremiumFeeETH(uint16 _maxCVI, uint8 _leverage) external override payable returns (uint168 positionUnitsAmount, uint168 positionedTokenAmount) {
         require(uint168(msg.value) == msg.value, "Too much ETH");
         require(noPremiumFeeAllowedAddresses[msg.sender]); // "Not allowed"
-        return _openPosition(uint168(msg.value), _maxCVI, 0, _leverage, false);   
+        return _openPosition(uint168(msg.value), _maxCVI, 0, _leverage, false, false);
     }
 
     function transferFunds(uint256 _tokenAmount) internal override {
