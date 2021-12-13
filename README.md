@@ -30,9 +30,45 @@ More information on CVI can be found [here](https://cviofficial.medium.com/cvix-
 
 ---
 
-## CVI platform addresses:
+## Contract addresses:
 
-### ETH Platform Contract addresses:
+### CVI Platform (USDC as collateral, Ethereum network):
+
+Platform: [0x2167EEFB9ECB52fB6fCf1ff8f7dAe6F0121F4fBC](https://etherscan.io/address/0x2167EEFB9ECB52fB6fCf1ff8f7dAe6F0121F4fBC)
+
+LP Staking: [0x717508A974CCa423343D8C2A71d257f799ac4dbD](https://etherscan.io/address/0x717508A974CCa423343D8C2A71d257f799ac4dbD)
+
+Position Rewards: [0x337F91f5A3F688445d2F29496F33f75eC1b93728](https://etherscan.io/address/0x337F91f5A3F688445d2F29496F33f75eC1b93728)
+
+FeesCalculator: [0xc19cDD1b4e7C12Edfbfbd12C9cf4cd1CDE29e70D](https://etherscan.io/address/0xc19cDD1b4e7C12Edfbfbd12C9cf4cd1CDE29e70D)
+
+Liquidation: [0xf359e1bD63c3308B77D6424A6dC9BFc78BB64922](https://etherscan.io/address/0xf359e1bD63c3308B77D6424A6dC9BFc78BB64922)
+
+### ETHVI Platform (USDC as collateral, Ethereum network):
+
+Platform: [0x0E0DA40101D8f6eB1b1d6b0215327e8452e0Bc60](https://etherscan.io/address/0x0E0DA40101D8f6eB1b1d6b0215327e8452e0Bc60)
+
+LP Staking: [0x55Ab074cFB5d07Bbb5D1561969A079914DF5053a](https://etherscan.io/address/0x55Ab074cFB5d07Bbb5D1561969A079914DF5053a)
+
+Position Rewards: [0x9AD0E2cae661Eab5CB42f23D7BE66352fcB0219D](https://etherscan.io/address/0x9AD0E2cae661Eab5CB42f23D7BE66352fcB0219D)
+
+FeesCalculator: [0x78852f82632da2F00d931F9465d7162d1Ed8B93C](https://etherscan.io/address/0x78852f82632da2F00d931F9465d7162d1Ed8B93C)
+
+Liquidation: [0xf9057e3189a357422933535D8022A25412B31f8C](https://etherscan.io/address/0xf9057e3189a357422933535D8022A25412B31f8C)
+
+### CVI Platform (USDC as collateral, Polygon network):
+
+Platform: [0x3863D0C9b7552cD0d0dE99fe9f08a32fED6ab72f](https://polygonscan.com/address/0x3863D0C9b7552cD0d0dE99fe9f08a32fED6ab72f)
+
+LP Staking: [0xd53f9D95a87896E3543251aCb3fb13D3d4D7D09e](https://polygonscan.com/address/0xd53f9D95a87896E3543251aCb3fb13D3d4D7D09e)
+
+Rewards: [0xf293873CA668Ef7F1412C46c2C2c682Fd3441c02](https://polygonscan.com/address/0xf293873CA668Ef7F1412C46c2C2c682Fd3441c02)
+
+FeesCalculator: [0x68E8be77f3EB29074A83aE01007fA71cB5Cc5926](https://polygonscan.com/address/0x68E8be77f3EB29074A83aE01007fA71cB5Cc5926)
+
+Liquidation: [0x02DEb6E484c12916ABf245d5518f5315e1291555](https://polygonscan.com/address/0x02DEb6E484c12916ABf245d5518f5315e1291555)
+
+### CVI ETH-Denominated Platform (ETH as collateral, Ethereum network):
 
 ETH Platform: [0x5005e8Dc0033E78AF80cfc8d10f5163f2FcF0E79](https://etherscan.io/address/0x5005e8Dc0033E78AF80cfc8d10f5163f2FcF0E79)
 
@@ -46,7 +82,13 @@ Liquidation: [0x8d55c22ea6610e3fa4659d3d5f4d751ca1e62573](https://etherscan.io/a
 
 Staking Proxy: [0x287839632973f7754C04a9E23d393Aa09fa5b6De](https://etherscan.io/address/0x287839632973f7754C04a9E23d393Aa09fa5b6De)
 
-### USDT Platform Contract addresses:
+### Staking Rewards
+
+GOVI-ETH Staking Rewards: [0x936Dd3112a9D39Af39aDdA798503D9E7E7975Fb7](https://etherscan.io/address/0x936Dd3112a9D39Af39aDdA798503D9E7E7975Fb7)
+
+COTI-ETH Staking Rewards: [0xe6e5220291CF78b6D93bd1d08D746ABbC115C64b](https://etherscan.io/address/0xe6e5220291CF78b6D93bd1d08D746ABbC115C64b)
+
+### V0.1 USDT Platform (Deprecated, liquidity was migrated to the new USDC-backed platforms):
 
 USDT Platform: [0xe0437BeB5bb7Cf980e90983f6029033d710bd1da](https://etherscan.io/address/0xe0437BeB5bb7Cf980e90983f6029033d710bd1da)
 
@@ -58,17 +100,35 @@ FeesModel: [0xF5eBF50661EE5B128Dad3d71050520CccCc10601](https://etherscan.io/add
 
 FeesCalculator: [0x1fF4434e0A41DBF903aa68923d6Da76904546F23](https://etherscan.io/address/0x1fF4434e0A41DBF903aa68923d6Da76904546F23)
 
-GOVI Staking: [0xDb3130952eD9b5fa7108deDAAA921ae8f59beaCb](https://etherscan.io/address/0xDb3130952eD9b5fa7108deDAAA921ae8f59beaCb)
+### Volatility tokens (Ethereum network):
 
-Liquidation: [0xbB2a8986F1feB41C374658Bcd4A5E0B6b536Ba1a](https://etherscan.io/address/0xbB2a8986F1feB41C374658Bcd4A5E0B6b536Ba1a)
+ETHVOL Token: [0x36bab6b3b722f90475b8e681b4b0a4dc68ee5399](https://etherscan.io/address/0x36bab6b3b722f90475b8e681b4b0a4dc68ee5399) 
 
-COTI-ETH Staking Rewards: [0xe6e5220291CF78b6D93bd1d08D746ABbC115C64b](https://etherscan.io/address/0xe6e5220291CF78b6D93bd1d08D746ABbC115C64b)
+ETHVOL-USDC Pair: [0x197e99bD87F98DFde461afE3F706dE36c9635a5D](https://v2.info.uniswap.org/pair/0x197e99bD87F98DFde461afE3F706dE36c9635a5D)
 
-GOVI-ETH Staking Rewards: [0x936Dd3112a9D39Af39aDdA798503D9E7E7975Fb7](https://etherscan.io/address/0x936Dd3112a9D39Af39aDdA798503D9E7E7975Fb7)
+ETHVOL-USDC LP Staking: [0x967440F87132008184C25b9c385860E908DF1a6D](https://etherscan.io/address/0x967440F87132008184C25b9c385860E908DF1a6D)
+
+ETHVOL Rebaser: [0x284C036D52C4fD52af1cedEEA5EFc9160587133B](https://etherscan.io/address/0x284C036D52C4fD52af1cedEEA5EFc9160587133B)
+
+### Volatility tokens (Polygon network):
+
+CVOL Token: [0x9cd552551ec130b50c1421649c8d11e76ac821e1](https://polygonscan.com/address/0x9cd552551ec130b50c1421649c8d11e76ac821e1) 
+
+CVOL-USDC Pair: [0x1dd0095a169e8398448A8e72f15A1868d99D9348](https://info.quickswap.exchange/pair/0x1dd0095a169e8398448A8e72f15A1868d99D9348)
+
+CVOL-USDC LP Staking: [0xEA7b8DC5615e049417C80C795eA652556971c423](https://polygonscan.com/address/0xEA7b8DC5615e049417C80C795eA652556971c423)
+
+CVOL Rebaser: [0x9bE0B60D6CCeFF2f9D15A2D9f1EA16BCcB2b7427](https://polygonscan.com/address/0x9bE0B60D6CCeFF2f9D15A2D9f1EA16BCcB2b7427)
 
 ### Governance Token
 
 GOVI Token: [0xeeaa40b28a2d1b0b08f6f97bb1dd4b75316c6107](https://etherscan.io/address/0xeeaa40b28a2d1b0b08f6f97bb1dd4b75316c6107)
+
+### GOVI Staking
+
+GOVI Staking (Ethereum): [0xDb3130952eD9b5fa7108deDAAA921ae8f59beaCb](https://etherscan.io/address/0xDb3130952eD9b5fa7108deDAAA921ae8f59beaCb)
+
+GOVI Staking (Polygon): [0x399b649002277d7a3502C9Af65DE71686F356f33](https://polygonscan.com/address/0x399b649002277d7a3502C9Af65DE71686F356f33)
 
 ### Ethereum accounts:
 
