@@ -1,43 +1,34 @@
 {
-  "name": "cvi-contracts",
-  "version": "0.2.0",
-  "description": "CVI (Crypto volatility index) Smart contracts",
+  "name": "@coti-cvi/contracts-cvi",
+  "version": "1.0.0",
+  "sideEffects": false,
+  "description": "COTI CVI Smart Contracts",
+  "license": "UNLICENSED",
   "directories": {
     "test": "test"
   },
   "scripts": {
-    "test": "npx hardhat test"
+    "test": "TS_NODE_TRANSPILE_ONLY=1 hardhat test --show-stack-traces",
+    "clean": "cross-env rm -rf cache artifacts > /dev/null 2>&1 || exit 0",
+    "compile": "cross-env TS_NODE_TRANSPILE_ONLY=1 hardhat compile --show-stack-traces"
   },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/coti-io/cvi-contracts"
-  },
-  "author": "",
-  "license": "BUSL",
-  "bugs": {
-    "url": "https://github.com/coti-io/cvi-contracts/issues"
-  },
-  "homepage": "https://github.com/coti-io/cvi-contracts#readme",
-  "devDependencies": {
+  "dependencies": {
     "@chainlink/contracts": "^0.2.2",
-    "@ethersproject/hardware-wallets": "^5.5.0",
-    "@nomiclabs/hardhat-ethers": "^2.0.2",
-    "@nomiclabs/hardhat-etherscan": "^2.1.7",
-    "@nomiclabs/hardhat-truffle5": "^2.0.2",
-    "@nomiclabs/hardhat-waffle": "^2.0.1",
+    "@nomiclabs/hardhat-ethers": "npm:hardhat-deploy-ethers@0.3.0-beta.13",
+    "@nomiclabs/hardhat-truffle5": "2.0.2",
+    "@nomiclabs/hardhat-waffle": "2.0.1",
     "@nomiclabs/hardhat-web3": "^2.0.0",
     "@openzeppelin/contracts": "^4.3.2",
     "@openzeppelin/contracts-upgradeable": "^4.3.2",
     "@openzeppelin/hardhat-upgrades": "^1.10.0",
     "@openzeppelin/test-helpers": "^0.5.15",
-    "chai": "^4.3.4",
-    "dotenv": "^10.0.0",
-    "ethereum-waffle": "^3.4.0",
-    "ethers": "^5.5.1",
-    "hardhat": "^2.6.6",
+    "@uniswap/v2-core": "^1.0.1",
+    "@uniswap/v2-periphery": "^1.1.0-beta.0",
+    "chai": "^4.3.6",
+    "ethers": "5.6.9",
+    "find-up": "5.0.0",
+    "hardhat": "2.9.2",
     "hardhat-contract-sizer": "^2.1.1",
-    "ts-node": "^10.4.0",
-    "typescript": "^4.4.4",
     "web3": "^1.6.0"
   }
 }

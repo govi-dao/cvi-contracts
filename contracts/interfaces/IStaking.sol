@@ -1,31 +1,31 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity ^0.8;
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "./ISwapper.sol";
+import "@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
 
 interface IStaking {
-	function stake(uint256 amount) external;
-	function unstake(uint256 amount) external;
+    event ProfitAdded(address indexed token, uint256 profit);
+    event Staked(address indexed account, uint256 goviAmount, uint256 xGOVIMinted, uint256 xGOVIBalance);
+    event Unstaked(address indexed account, uint256 xGOVIBurned, uint256 goviReward, uint256 xGOVIBalance);
+    event RewardClaimed(address indexed account, address indexed token, uint256 reward);
 
-    function claimProfit(IERC20 token) external returns (uint256);
+	function stake(uint256 goviAmount) external returns (uint256 xGOVIAmount);
+	function unstake(uint256 xGOVIAmount) external returns (uint256 goviAmount);
+
+    function claimProfit(IERC20Upgradeable token) external returns (uint256);
     function claimAllProfits() external returns (uint256[] memory profits);
 
-    function addClaimableToken(IERC20 newClaimableToken) external;
-    function removeClaimableToken(IERC20 removedClaimableToken) external;
+    function addClaimableToken(IERC20Upgradeable newClaimableToken) external;
+    function removeClaimableToken(IERC20Upgradeable removedClaimableToken) external;
 
-    function addToken(IERC20 newToken) external;
-    function removeToken(IERC20 removedToken) external;
-
-    function convertFunds() external;
-
-    function setSwapper(ISwapper newSwapper) external;
     function setStakingLockupTime(uint256 newLockupTime) external;
+    function setRewardRate(uint256 newRewardPerSecond) external;
 
-    function profitOf(address account, IERC20 token) external view returns (uint256);
+    function profitOf(address account, IERC20Upgradeable token) external view returns (uint256);
+    function getClaimableTokens() external view returns (IERC20Upgradeable[] memory);
 
-    function getClaimableTokens() external view returns (IERC20[] memory);
-    function getOtherTokens() external view returns (IERC20[] memory);
+    function rewardPerSecond() external view returns (uint256);
+    function lastUpdateTime() external view returns (uint256);
 
     receive() external payable;
 }

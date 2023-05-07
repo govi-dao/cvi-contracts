@@ -14,9 +14,9 @@ contract Liquidation is ILiquidation, Ownable {
     uint16[MAX_LEVERAGE] public liquidationMinThresholdPercents = [50, 50, 100, 100, 150, 150, 200, 200];
     uint16[MAX_LEVERAGE] public liquidationMaxRewardPercents = [30, 30, 30, 30, 30, 30, 30, 30];
 
-    uint16 public maxCVIValue;
+    uint32 public maxCVIValue;
 
-    constructor(uint16 _maxCVIValue) {
+    constructor(uint32 _maxCVIValue) {
         maxCVIValue = _maxCVIValue;
     }
 
@@ -45,12 +45,12 @@ contract Liquidation is ILiquidation, Ownable {
         liquidationMaxRewardPercents = _newMaxRewardPercents;
     }
 
-    function isLiquidationCandidate(uint256 _positionBalance, bool _isPositive, uint168 _positionUnitsAmount, uint16 _openCVIValue, uint8 _leverage) public view override returns (bool) {
+    function isLiquidationCandidate(uint256 _positionBalance, bool _isPositive, uint168 _positionUnitsAmount, uint32 _openCVIValue, uint8 _leverage) public view override returns (bool) {
         uint256 originalBalance = calculateOriginalBalance(_positionUnitsAmount, _openCVIValue, _leverage);
         return (!_isPositive ||  _positionBalance < originalBalance * liquidationMinThresholdPercents[_leverage - 1] / LIQUIDATION_MAX_FEE_PERCENTAGE);
     }
 
-    function getLiquidationReward(uint256 _positionBalance, bool _isPositive, uint168 _positionUnitsAmount, uint16 _openCVIValue, uint8 _leverage) external view override returns (uint256 finderFeeAmount) {
+    function getLiquidationReward(uint256 _positionBalance, bool _isPositive, uint168 _positionUnitsAmount, uint32 _openCVIValue, uint8 _leverage) external view override returns (uint256 finderFeeAmount) {
         if (!isLiquidationCandidate(_positionBalance, _isPositive, _positionUnitsAmount, _openCVIValue, _leverage)) {
             return 0;
         }
@@ -71,7 +71,7 @@ contract Liquidation is ILiquidation, Ownable {
         }
     }
 
-    function calculateOriginalBalance(uint168 _positionUnitsAmount, uint16 _openCVIValue, uint8 _leverage) private view returns (uint256) {
+    function calculateOriginalBalance(uint168 _positionUnitsAmount, uint32 _openCVIValue, uint8 _leverage) private view returns (uint256) {
         return _positionUnitsAmount * _openCVIValue / maxCVIValue - _positionUnitsAmount * _openCVIValue / maxCVIValue * (_leverage - 1) / _leverage;
     }
 }

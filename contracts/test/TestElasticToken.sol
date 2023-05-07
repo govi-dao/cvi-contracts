@@ -6,7 +6,7 @@ import "../ElasticToken.sol";
 
 contract TestElasticToken is ElasticToken {
 
-    constructor(string memory name_, string memory symbol_, uint8 decimals_) {
+    constructor(string memory name_, string memory symbol_, uint8 decimals_) initializer {
         ElasticToken.__ElasticToken_init(name_, symbol_, decimals_);
 
         scalingFactor = SCALING_FACTOR_DECIMALS;

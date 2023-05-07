@@ -34,7 +34,7 @@ contract ElasticToken is IElasticToken, OwnableUpgradeable {
         _;
     }
 
-    function __ElasticToken_init(string memory name_, string memory symbol_, uint8 decimals_) public initializer {
+    function __ElasticToken_init(string memory name_, string memory symbol_, uint8 decimals_) public onlyInitializing {
         OwnableUpgradeable.__Ownable_init();
 
         name = name_;
@@ -149,7 +149,7 @@ contract ElasticToken is IElasticToken, OwnableUpgradeable {
     *      Where DeviationFromTargetRate is (MarketOracleRate - targetRate) / targetRate
     *      and targetRate is CpiOracleRate / baseCpi
     */
-    function rebase(uint256 indexDelta, bool positive) public override onlyRebaser returns (uint256) {        
+    function rebase(uint256 indexDelta, bool positive) internal onlyRebaser returns (uint256) {        
         if (indexDelta == 0) {
           emit Rebase(block.timestamp, scalingFactor, scalingFactor);
           return totalSupply;

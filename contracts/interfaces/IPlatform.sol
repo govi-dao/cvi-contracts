@@ -12,7 +12,7 @@ interface IPlatform {
     struct Position {
         uint168 positionUnitsAmount;
         uint8 leverage;
-        uint16 openCVIValue;
+        uint32 openCVIValue;
         uint32 creationTimestamp;
         uint32 originalCreationTimestamp;
     }
@@ -29,15 +29,14 @@ interface IPlatform {
 
     function increaseSharedPool(uint256 tokenAmount) external;
 
-    function openPositionWithoutPremiumFee(uint168 tokenAmount, uint16 maxCVI, uint8 leverage) external returns (uint168 positionUnitsAmount, uint168 positionedTokenAmount);
-    function openPositionWithoutVolumeFee(uint168 tokenAmount, uint16 maxCVI, uint16 maxBuyingPremiumFeePercentage, uint8 leverage) external returns (uint168 positionUnitsAmount, uint168 positionedTokenAmount);
-    function openPosition(uint168 tokenAmount, uint16 maxCVI, uint16 maxBuyingPremiumFeePercentage, uint8 leverage) external returns (uint168 positionUnitsAmount, uint168 positionedTokenAmount);
-    function closePosition(uint168 positionUnitsAmount, uint16 minCVI, uint16 maxClosingPremiumFeePercentage) external returns (uint256 tokenAmount);
-    function closePositionWithoutVolumeFee(uint168 positionUnitsAmount, uint16 minCVI) external returns (uint256 tokenAmount);
+    function openPositionWithoutFee(uint168 tokenAmount, uint32 maxCVI, uint8 leverage) external returns (uint168 positionUnitsAmount, uint168 positionedTokenAmount, uint168 openPositionFee, uint168 buyingPremiumFee);
+    function openPosition(uint168 tokenAmount, uint32 maxCVI, uint16 maxBuyingPremiumFeePercentage, uint8 leverage) external returns (uint168 positionUnitsAmount, uint168 positionedTokenAmount, uint168 openPositionFee, uint168 buyingPremiumFee);
+    function closePositionWithoutFee(uint168 positionUnitsAmount, uint32 minCVI) external returns (uint256 tokenAmount, uint256 closePositionFee, uint256 closingPremiumFee);
+    function closePosition(uint168 positionUnitsAmount, uint32 minCVI) external returns (uint256 tokenAmount, uint256 closePositionFee, uint256 closingPremiumFee);
 
     function liquidatePositions(address[] calldata positionOwners) external returns (uint256 finderFeeAmount);
 
-    function setAddressSpecificParameters(address holderAddress, bool shouldLockPosition, bool noPremiumFeeAllowed, bool increaseSharedPoolAllowed) external;
+    function setAddressSpecificParameters(address holderAddress, bool shouldLockPosition, bool noPremiumFeeAllowed, bool increaseSharedPoolAllowed, bool isLiquidityProvider) external;
 
     function setRevertLockedTransfers(bool revertLockedTransfers) external;
 
@@ -60,7 +59,17 @@ interface IPlatform {
 
     function calculateLatestTurbulenceIndicatorPercent() external view returns (uint16);
 
-    function positions(address positionAddress) external view returns (uint168 positionUnitsAmount, uint8 leverage, uint16 openCVIValue, uint32 creationTimestamp, uint32 originalCreationTimestamp);
+    function cviOracle() external view returns (ICVIOracle);
+    function feesCalculator() external view returns (IFeesCalculator);
+
+    function PRECISION_DECIMALS() external view returns (uint256);
+
+    function totalPositionUnitsAmount() external view returns (uint256);
+    function totalLeveragedTokensAmount() external view returns (uint256);
+    function totalFundingFeesAmount() external view returns (uint256);
+    function latestFundingFees() external view returns (uint256);
+
+    function positions(address positionAddress) external view returns (uint168 positionUnitsAmount, uint8 leverage, uint32 openCVIValue, uint32 creationTimestamp, uint32 originalCreationTimestamp);
     function buyersLockupPeriod() external view returns (uint256);
-    function maxCVIValue() external view returns (uint16);
+    function maxCVIValue() external view returns (uint32);
 }

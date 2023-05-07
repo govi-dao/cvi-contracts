@@ -14,4 +14,8 @@ contract FakeERC20 is ERC20 {
     function decimals() public view override returns (uint8) {
         return __decimals;
     }
+
+    function mint(address _account, uint256 _amount) external {
+        _mint(_account,_amount);
+    }
 }

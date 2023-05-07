@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity ^0.8;
 
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-contract FakeUniswapV2Pair  {
+contract FakeUniswapV2Pair is ERC20 {
     bool public synced = false;
 
     address public factory;
@@ -33,7 +34,12 @@ contract FakeUniswapV2Pair  {
         _blockTimestampLast = blockTimestampLast;
     }
 
-    constructor() {
+    function setReserves(uint112 _reserve0, uint112 _reserve1) external {
+        reserve0 = _reserve0;
+        reserve1 = _reserve1;
+    }
+
+    constructor() ERC20("PAIR", "PAIR") {
         factory = msg.sender;
     }
 

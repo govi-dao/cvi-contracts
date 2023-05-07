@@ -9,7 +9,7 @@ interface IRebaser {
     function setVolatilityToken(IVolatilityToken volatilityToken) external;
     function setUniswapPairs(IUniswapV2Pair[] calldata uniswapPairs) external;
     function setRebaserAddress(address user, bool isAllowed) external;
-    function setUpkeepInterval(uint32 _upkeepInterval) external;
-    function setUpkeepTimeWindow(uint32 _upkeepTimeWindow) external;
-    function setEnableWhitelist(bool _enableWhitelist) external;
+    function setUpkeepInterval(uint32 upkeepInterval) external;
+    function setUpkeepTimeWindow(uint32 upkeepTimeWindow) external;
+    function setEnableWhitelist(bool enableWhitelist) external;
 }

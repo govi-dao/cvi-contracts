@@ -15,13 +15,16 @@ contract RequestFeesCalculator is IRequestFeesCalculator, Ownable {
 	uint16 public minTimeDelayFeePercent = 0;
 	uint16 public maxTimeDelayFeePercent = 100;
 
-	uint32 public minWaitTime = 15 minutes;
+	uint32 public override minWaitTime = 15 minutes;
 
 	uint16 public beforeTargetTimeMaxPenaltyFeePercent = 300;
 	uint16 public afterTargetMidTimePenaltyFeePercent = 300;
 	uint16 public afterTargetMaxTimePenaltyFeePercent = 500;
 
 	uint16 public findersFeePercent = 5000;
+
+    uint16 public keepersFeePercent = 100;
+    uint256 public keepersFeeMax = 4e6;
 
 	uint32 public afterTargetMidTime = 1 hours;
 	uint32 public afterTargetMaxTime = 12 hours;
@@ -51,8 +54,18 @@ contract RequestFeesCalculator is IRequestFeesCalculator, Ownable {
     	feePercentage = uint16(maxTimeDelayFeePercent - (_timeDelay - minTimeWindow) * (maxTimeDelayFeePercent - minTimeDelayFeePercent) / (maxTimeWindow - minTimeWindow));
     }
 
-    function calculateFindersFee(uint256 tokensLeftAmount) external view override returns (uint256 findersFeeAmount) {
-    	return tokensLeftAmount * findersFeePercent / MAX_FEE_PERCENTAGE;
+    function calculateFindersFee(uint256 _tokensLeftAmount) external view override returns (uint256 findersFeeAmount) {
+    	return _tokensLeftAmount * findersFeePercent / MAX_FEE_PERCENTAGE;
+    }
+
+    function calculateKeepersFee(uint256 _tokensAmount) external view override returns (uint256 keepersFeeAmount) {
+        uint256 percentageAmount =  _tokensAmount * keepersFeePercent / MAX_FEE_PERCENTAGE;
+
+        if (percentageAmount >= keepersFeeMax) {
+            return keepersFeeMax;
+        }
+
+        return percentageAmount;
     }
 
     function isLiquidable(IVolatilityToken.Request calldata _request) external view override returns (bool liquidable) {
@@ -100,6 +113,15 @@ contract RequestFeesCalculator is IRequestFeesCalculator, Ownable {
     function setFindersFee(uint16 _findersFeePercent) external override onlyOwner {
     	require(_findersFeePercent <= MAX_FEE_PERCENTAGE, "Fee larger than max");
     	findersFeePercent = _findersFeePercent;
+    }
+
+    function setKeepersFeePercent(uint16 _keepersFeePercent) external override onlyOwner {
+        require(_keepersFeePercent <= MAX_FEE_PERCENTAGE, "Fee larger than max");
+        keepersFeePercent = _keepersFeePercent;   
+    }
+
+    function setKeepersFeeMax(uint256 _keepersFeeMax) external override onlyOwner {
+        keepersFeeMax = _keepersFeeMax;
     }
 
     function getMaxFees() external view override returns (uint16 maxFeesPercent) {

@@ -16,27 +16,29 @@ contract CVIOracle is ICVIOracle, Ownable {
     bool public deviationCheck = false;
     uint16 public maxDeviation = 1000;
 
+    uint8 public leverage;
     uint256 public maxCVIValue;
 
-    constructor(AggregatorV3Interface _cviAggregator, AggregatorV3Interface _cviDeviationAggregator, uint256 _maxCVIValue) {
+    constructor(AggregatorV3Interface _cviAggregator, AggregatorV3Interface _cviDeviationAggregator, uint256 _maxCVIValue, uint8 _leverage) {
     	cviAggregator = _cviAggregator;
         cviDeviationAggregator = _cviDeviationAggregator;
         maxCVIValue = _maxCVIValue;
+        leverage = _leverage;
     }
 
-    function getCVIRoundData(uint80 _roundId) external view override returns (uint16 cviValue, uint256 cviTimestamp) {
+    function getCVIRoundData(uint80 _roundId) external view override returns (uint32 cviValue, uint256 cviTimestamp) {
         (, int256 cviOracleValue,, uint256 cviOracleTimestamp,) = cviAggregator.getRoundData(_roundId);
         cviTimestamp = cviOracleTimestamp;
         cviValue = getTruncatedCVIValue(cviOracleValue);
     }
 
-    function getCVILatestRoundData() external view override returns (uint16 cviValue, uint80 cviRoundId, uint256 cviTimestamp) {
+    function getCVILatestRoundData() external view override returns (uint32 cviValue, uint80 cviRoundId, uint256 cviTimestamp) {
         (uint80 oracleRoundId, int256 cviOracleValue,, uint256 oracleTimestamp,) = cviAggregator.latestRoundData();
-        uint16 truncatedCVIOracleValue = getTruncatedCVIValue(cviOracleValue);
+        uint32 truncatedCVIOracleValue = getTruncatedCVIValue(cviOracleValue);
 
         if (deviationCheck) {
             (, int256 cviDeviationOracleValue,,,) = cviDeviationAggregator.latestRoundData();
-            uint16 truncatedCVIDeviationOracleValue = getTruncatedCVIValue(cviDeviationOracleValue);
+            uint32 truncatedCVIDeviationOracleValue = getTruncatedCVIValue(cviDeviationOracleValue);
 
             uint256 deviation = truncatedCVIDeviationOracleValue > truncatedCVIOracleValue ? truncatedCVIDeviationOracleValue - truncatedCVIOracleValue : truncatedCVIOracleValue - truncatedCVIDeviationOracleValue;
 
@@ -54,14 +56,14 @@ contract CVIOracle is ICVIOracle, Ownable {
         maxDeviation = _newMaxDeviation;
     }
 
-    function getTruncatedCVIValue(int256 cviOracleValue) private view returns (uint16) {
-        uint256 cviValue = uint256(cviOracleValue);
+    function getTruncatedCVIValue(int256 cviOracleValue) private view returns (uint32) {
+        uint256 cviValue = uint256(cviOracleValue) * leverage;
         if (cviValue > maxCVIValue) {
-            require(uint16(maxCVIValue / CVI_DECIMALS_TRUNCATE) > 0, "CVI must be positive");
-            return uint16(maxCVIValue / CVI_DECIMALS_TRUNCATE);
+            require(uint32(maxCVIValue / CVI_DECIMALS_TRUNCATE) > 0, "CVI must be positive");
+            return uint32(maxCVIValue / CVI_DECIMALS_TRUNCATE);
         }
 
-        require(uint16(cviValue / CVI_DECIMALS_TRUNCATE) > 0, "CVI must be positive");
-        return uint16(cviValue / CVI_DECIMALS_TRUNCATE);
+        require(uint32(cviValue / CVI_DECIMALS_TRUNCATE) > 0, "CVI must be positive");
+        return uint32(cviValue / CVI_DECIMALS_TRUNCATE);
     }
 }

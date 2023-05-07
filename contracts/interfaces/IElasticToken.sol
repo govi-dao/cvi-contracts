@@ -22,6 +22,5 @@ interface IElasticToken {
     function underlyingToValue(uint256 unerlyingValue) external view returns (uint256);
     function valueToUnderlying(uint256 value) external view returns (uint256);
 
-    function rebase(uint256 indexDelta, bool positive) external returns (uint256);
     function setRebaser(address rebaser) external;
 }
